@@ -28,14 +28,23 @@ Deploy the PS5 Tracker **PHP** API (`server/`) to cPanel at `https://shivarya.de
 5. **Import schema**: `mysql -u ps5_tracker_user -p'<pass>' ps5Tracker < database/schema.sql`
 6. **Cron job** — cPanel → Cron Jobs (UI is safer than `crontab -l | ... | crontab -` piping over SSH, which has bitten this account before by silently wiping unrelated existing cron entries if the pipe chain mis-quotes):
    ```
-   */5 * * * * /usr/local/bin/php /home/hm5pno1wummg/public_html/ps5_tracker/cron/stock_poll_worker.php >> /home/hm5pno1wummg/ps5_tracker_worker.log 2>&1
+   */30 * * * * /usr/local/bin/php /home/hm5pno1wummg/public_html/ps5_tracker/cron/stock_poll_worker.php >> /home/hm5pno1wummg/ps5_tracker_worker.log 2>&1
    ```
-   **Always run `crontab -l` before and after touching the crontab on this host** to confirm other projects' cron entries (`expense_tracker`'s `gmail_sync_worker.php`, `cleanup-sessions.sh`) are still intact.
+   **Always run `crontab -l` before and after touching the crontab on this host** to confirm other projects' cron entries (`expense_tracker`'s `gmail_sync_worker.php`, `cleanup-sessions.sh`, the server health monitor) are still intact. (Lowered from `*/5` on 2026-06-29 — pairs with the local crawler's 30-min cadence, see below.)
 
 ## Updating an existing deployment
 
-1. Tarball + scp + extract the changed `server/` files into `~/public_html/ps5_tracker` (same as step 2 above — overwrites in place, `.env` is excluded from the tarball so it survives).
-2. If `database/schema.sql` changed, write a numbered migration instead and apply it manually — don't re-run `schema.sql` against a live DB.
+1. Tarball (exclude `.env`, `vendor`, `*.log`) + scp + extract the changed `server/` files into `~/public_html/ps5_tracker` — overwrites in place, `.env` is excluded so it survives:
+   ```bash
+   tar -czf /tmp/ps5_server_deploy.tar.gz --exclude='server/.env' --exclude='server/vendor' --exclude='server/*.log' -C "c:/Users/Ash/Documents/Projects/apps/ps5-tracker" server
+   scp -i ~/.ssh/cpanel_key /tmp/ps5_server_deploy.tar.gz hm5pno1wummg@<host>:~/ps5_server_deploy.tar.gz
+   ssh cpanel "cd ~/public_html/ps5_tracker && tar -xzf ~/ps5_server_deploy.tar.gz --strip-components=1 -C . && rm ~/ps5_server_deploy.tar.gz"
+   ```
+2. If `database/schema.sql` changed, write a numbered migration in `database/migrations/` instead and apply it manually — don't re-run `schema.sql` against a live DB. Apply without ever printing the DB password into the terminal/transcript:
+   ```bash
+   ssh cpanel "cd ~/public_html/ps5_tracker && eval \$(grep -E '^DB_' .env | sed 's/^/export /') && mysql -u \"\$DB_USER\" -p\"\$DB_PASS\" \"\$DB_NAME\" < database/migrations/00N_name.sql"
+   ```
+3. After deploying, verify with a read-only check rather than a destructive/state-changing one — e.g. `grep -c 'blinkit' controllers/listingsController.php` over SSH to confirm a specific change landed, rather than running the worker manually (which can send a real push notification).
 
 ## Add tracked listings
 
@@ -49,8 +58,15 @@ See the `ps5-add-listing` skill for the per-store URL format and which stores ar
 ```powershell
 Invoke-RestMethod https://shivarya.dev/ps5_tracker/health
 Invoke-RestMethod https://shivarya.dev/ps5_tracker/status
+Invoke-RestMethod https://shivarya.dev/ps5_tracker/stock/report -Method POST -Body '{}' -ContentType 'application/json'  # expect 401 (route exists, auth required), not 404
 ```
-Run the worker once manually via SSH (`php cron/stock_poll_worker.php`) and check `stock_check_log` for fresh rows before trusting cron timing alone.
+Run the worker once manually via SSH (`php cron/stock_poll_worker.php`) and check `stock_check_log` for fresh rows before trusting cron timing alone — but note this can send a real push notification on a transition, so prefer the read-only checks above when just confirming a deploy landed.
+
+## Local crawler dependency (`local-crawler/`, runs on the user's Windows machine, not this server)
+
+The local Playwright crawler (see the `ps5-local-crawler` skill) reports results to `POST /stock/report` on this same API. If that endpoint's code changes here, redeploy before assuming the local crawler is broken — it'll get a `404` and silently discard a run's results otherwise (a real bug hit during initial rollout, 2026-06-29: the endpoint existed locally but `local-crawler/.env` was pointed at production before the matching server code was deployed).
+
+Server-side `cron/stock_poll_worker.php`'s `STORE_CHECKERS` map only covers `reliance_digital`/`vijay_sales`/`sony_center` — Croma/Games The Shop/Flipkart/Amazon/Blinkit/Instamart are deliberately excluded (not just "expected blocked") because the local crawler owns those exclusively now. Don't re-add them to that map without removing them from `LOCAL_STORES` in `local-crawler/index.js` first, or the two sides will race and clobber each other's results (real bug hit and fixed 2026-06-30).
 
 ## Troubleshooting
 
@@ -58,5 +74,6 @@ Run the worker once manually via SSH (`php cron/stock_poll_worker.php`) and chec
 |---|---|
 | Request returns the portfolio HTML instead of JSON | The `~/public_html/shivarya.dev/ps5_tracker` symlink is missing/broken — recreate it (see step 3) |
 | "Disk quota exceeded" on file writes | `uapi --output=jsonpretty Quota get_quota_info` — almost certainly inodes, not MB; investigate before deleting anything |
-| A checker reports `blocked` on every run | Expected for Croma/Flipkart/Amazon (confirmed Akamai/bot-blocked even from non-shared IPs); for Reliance Digital/Sony Center, the shared-hosting IP gets flagged more aggressively than a residential IP — backoff (`consecutive_failures` → `next_check_after`) handles this gracefully, no action needed |
+| Reliance Digital / Vijay Sales / Sony Center report `blocked` occasionally | The shared-hosting IP gets flagged more aggressively than a residential IP — backoff (`consecutive_failures` → `next_check_after`) handles this gracefully, no action needed. Croma/Games The Shop/Flipkart/Amazon/Blinkit/Instamart are NOT polled by this server at all (see above) — if one of those shows stale data, the issue is on the local crawler side, not here. |
+| `/stock/report` returns `404` | Server-side code (`controllers/stockReportController.php`, `utils/stockResultProcessor.php`, the route in `index.php`) hasn't been deployed yet — see "Updating an existing deployment" above |
 | Push notifications never arrive | Confirm `device_tokens` has an active row (mobile app must have launched once and registered); check worker stdout for "no active push tokens registered" |
