@@ -27,8 +27,9 @@ Ships with the repo — `RewriteBase /ps5_tracker/`, routes non-file requests to
 ### 5. Cron job
 cPanel → Cron Jobs:
 ```
-*/5 * * * * php ~/public_html/ps5_tracker/cron/stock_poll_worker.php >> ~/ps5_tracker_worker.log 2>&1
+*/30 * * * * php ~/public_html/ps5_tracker/cron/stock_poll_worker.php >> ~/ps5_tracker_worker.log 2>&1
 ```
+(Lowered from every 5 min to every 30 min — pairs with the local Playwright crawler, which runs on the same 30-min cadence from the user's Windows machine for retailers blocked on shared hosting; see `../local-crawler/`.)
 
 ### 6. Add tracked listings
 SSH in, then:

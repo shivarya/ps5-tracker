@@ -3,6 +3,7 @@ server/.env
 server/.env.production
 server/vendor/
 server/php_errors.log
+server/ps5_tracker_dev_server.log
 
 # Mobile
 mobile/node_modules/
@@ -11,6 +12,13 @@ mobile/.expo/
 mobile/dist/
 mobile/android/
 mobile/ios/
+
+# Local crawler
+local-crawler/node_modules/
+local-crawler/.env
+local-crawler/logs/
+local-crawler/.swiggy_token.json
+local-crawler/.swiggy_addresses.json
 
 # OS / editor
 .DS_Store

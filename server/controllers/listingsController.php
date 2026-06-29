@@ -1,5 +1,5 @@
 <?php
-const VALID_STORES = ['reliance_digital', 'croma', 'vijay_sales', 'sony_center', 'games_the_shop', 'flipkart', 'amazon'];
+const VALID_STORES = ['reliance_digital', 'croma', 'vijay_sales', 'sony_center', 'games_the_shop', 'flipkart', 'amazon', 'blinkit', 'instamart'];
 
 function handleListingsRoutes(string $uri, string $method): void
 {

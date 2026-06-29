@@ -18,11 +18,11 @@ $opts = getopt('', ['store:', 'url:', 'pincode::', 'name::']);
 
 if (empty($opts['store']) || empty($opts['url'])) {
     fwrite(STDERR, "Usage: php scripts/add_listing.php --store=<store> --url=<url> [--pincode=<pincode>] [--name=<label>]\n");
-    fwrite(STDERR, "Valid stores: reliance_digital, croma, vijay_sales, sony_center, games_the_shop, flipkart, amazon\n");
+    fwrite(STDERR, "Valid stores: reliance_digital, croma, vijay_sales, sony_center, games_the_shop, flipkart, amazon, blinkit, instamart\n");
     exit(1);
 }
 
-$validStores = ['reliance_digital', 'croma', 'vijay_sales', 'sony_center', 'games_the_shop', 'flipkart', 'amazon'];
+$validStores = ['reliance_digital', 'croma', 'vijay_sales', 'sony_center', 'games_the_shop', 'flipkart', 'amazon', 'blinkit', 'instamart'];
 if (!in_array($opts['store'], $validStores, true)) {
     fwrite(STDERR, "Invalid store '{$opts['store']}'. Valid: " . implode(', ', $validStores) . "\n");
     exit(1);

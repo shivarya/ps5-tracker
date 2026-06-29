@@ -1,0 +1,20 @@
+{
+  "name": "ps5-tracker-local-crawler",
+  "version": "1.0.0",
+  "description": "Local Playwright crawler for PS5 Tracker retailers blocked from shared hosting (Croma, Flipkart, Games The Shop, Amazon, Blinkit, Instamart)",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dashboard": "node dashboard.js",
+    "swiggy-login": "node swiggy-login.js",
+    "postinstall": "playwright install chromium"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "node-notifier": "^10.0.1",
+    "playwright": "^1.42.0"
+  }
+}

@@ -13,14 +13,17 @@ Adds a row to `tracked_listings` via the CLI script `server/scripts/add_listing.
 | `vijay_sales` | `https://www.vijaysales.com/p/{numeric-sku}/{slug}` | Pincode-aware. The most reliable of the three in production. **The numeric SKU must be in the URL** — it's extracted via regex. |
 | `sony_center` | `https://shopatsc.com/products/{handle}` | Stock-only, no pincode check exists for this store (direct-ship storefront). |
 
-## Not recommended — intentionally stubbed or unverified
+## Not recommended for the server-side checker — covered by the local crawler instead
 
 | Store | Status |
 |---|---|
-| `croma` | Confirmed Akamai-blocked at the edge even for a bare HTML page request. Adding a listing here will just accumulate `blocked` rows. |
-| `flipkart` | Checker is a stub returning `error`. A single anonymous request works, but any repeat request from the same IP gets `403`'d — unusable for repeated polling. |
-| `amazon` | Checker is a stub returning `error`. Blocked on the very first request, no exceptions. |
-| `games_the_shop` | Unverified HTML-heuristic fallback only — no real stock API captured yet (it's a custom Next.js storefront). |
+| `croma` | Confirmed Akamai-blocked at the edge even for a bare HTML page request. Adding a listing here will just accumulate `blocked` rows from the cron worker. Polled instead by the local Playwright crawler (`local-crawler/checkers/croma.js`, still best-effort — Akamai may still block a real browser). |
+| `flipkart` | Server-side checker is a stub returning `error`. Polled instead by `local-crawler/checkers/flipkart.js` (selectors not yet live-verified). |
+| `amazon` | Server-side checker is a stub returning `error`. Polled instead by `local-crawler/checkers/amazon.js` — hardest target even with a real browser, expect frequent `blocked`/`error`. |
+| `games_the_shop` | Server-side checker is an unverified HTML-heuristic fallback only. Polled instead by `local-crawler/checkers/gamesTheShop.js`. |
+| `blinkit`, `instamart` | No server-side checker exists at all (quick-commerce, purely location-driven stock) — only the local crawler covers these (`local-crawler/checkers/blinkit.js`, `instamart.js`, selectors not yet live-verified). |
+
+Listings for these 6 stores are still added the same way via `add_listing.php` — the local crawler discovers them through `GET /status` and filters by store name. See the `ps5-local-crawler` skill for running/scheduling that crawler.
 
 ## Command
 

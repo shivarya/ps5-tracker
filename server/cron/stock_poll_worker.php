@@ -19,26 +19,26 @@ require_once __DIR__ . '/../config/config.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../utils/httpClient.php';
 require_once __DIR__ . '/../utils/expoPush.php';
+require_once __DIR__ . '/../utils/stockResultProcessor.php';
 require_once __DIR__ . '/../utils/storeCheckers/StoreCheckerInterface.php';
 require_once __DIR__ . '/../utils/storeCheckers/RelianceDigitalChecker.php';
-require_once __DIR__ . '/../utils/storeCheckers/CromaChecker.php';
 require_once __DIR__ . '/../utils/storeCheckers/VijaySalesChecker.php';
 require_once __DIR__ . '/../utils/storeCheckers/SonyCenterChecker.php';
-require_once __DIR__ . '/../utils/storeCheckers/GamesTheShopChecker.php';
-require_once __DIR__ . '/../utils/storeCheckers/FlipkartChecker.php';
-require_once __DIR__ . '/../utils/storeCheckers/AmazonChecker.php';
 
 const WORKER_BUDGET_SECONDS = 45;   // stay under cPanel max_execution_time
 const MAX_LISTINGS_PER_RUN = 20;
 
+// Croma, Games The Shop, Flipkart, Amazon, Blinkit, Instamart are deliberately NOT listed here even
+// though their PHP checker classes still exist (CromaChecker/GamesTheShopChecker as graceful-degrade
+// fallbacks, FlipkartChecker/AmazonChecker as stubs) — the local Playwright crawler (`local-crawler/`)
+// owns these exclusively now via POST /stock/report. Having both sides poll the same listing raced:
+// the local crawler would correctly detect e.g. Flipkart in_stock, then this worker's always-broken
+// FlipkartChecker stub would run minutes later and clobber it back to `error`. Listings for stores not
+// in this map are skipped below ("no checker for store X") rather than polled.
 const STORE_CHECKERS = [
     'reliance_digital' => RelianceDigitalChecker::class,
-    'croma' => CromaChecker::class,
     'vijay_sales' => VijaySalesChecker::class,
     'sony_center' => SonyCenterChecker::class,
-    'games_the_shop' => GamesTheShopChecker::class,
-    'flipkart' => FlipkartChecker::class,
-    'amazon' => AmazonChecker::class,
 ];
 
 $startTime = time();
@@ -75,45 +75,12 @@ foreach ($listings as $listing) {
     /** @var StoreCheckerInterface $checkerClass */
     $result = $checkerClass::check($listing['url'], $listing['pincode']);
 
-    $isTransition = $result['status'] === 'in_stock' && $listing['last_status'] !== 'in_stock';
+    $processed = processCheckResult($db, $listing, $result);
 
-    $logId = $db->insert(
-        "INSERT INTO stock_check_log (listing_id, result, http_status, response_snippet, notified, error_message)
-         VALUES (?, ?, ?, ?, 0, ?)",
-        [$listing['id'], $result['status'], $result['http_status'], substr($result['raw'], 0, 2000), $result['error']]
-    );
+    echo "[stock-poller] listing {$listing['id']} ({$listing['store']}): {$result['status']}" . ($processed['transitioned'] ? ' <-- TRANSITION' : '') . "\n";
 
-    $statusChanged = $result['status'] !== $listing['last_status'];
-    if ($statusChanged) {
-        $db->execute(
-            "UPDATE tracked_listings SET last_status = ?, last_checked_at = NOW(), last_status_changed_at = NOW() WHERE id = ?",
-            [$result['status'], $listing['id']]
-        );
-    } else {
-        $db->execute(
-            "UPDATE tracked_listings SET last_checked_at = NOW() WHERE id = ?",
-            [$listing['id']]
-        );
-    }
-
-    if (in_array($result['status'], ['blocked', 'error'], true)) {
-        $failures = (int)$listing['consecutive_failures'] + 1;
-        $backoffMinutes = min($failures, 6) * 5;
-        $db->execute(
-            "UPDATE tracked_listings SET consecutive_failures = ?, next_check_after = DATE_ADD(NOW(), INTERVAL ? MINUTE) WHERE id = ?",
-            [$failures, $backoffMinutes, $listing['id']]
-        );
-    } else {
-        $db->execute(
-            "UPDATE tracked_listings SET consecutive_failures = 0, next_check_after = NULL WHERE id = ?",
-            [$listing['id']]
-        );
-    }
-
-    echo "[stock-poller] listing {$listing['id']} ({$listing['store']}): {$result['status']}" . ($isTransition ? ' <-- TRANSITION' : '') . "\n";
-
-    if ($isTransition) {
-        $transitions[] = ['listing' => $listing, 'log_id' => $logId];
+    if ($processed['transitioned']) {
+        $transitions[] = ['listing' => $listing, 'log_id' => $processed['log_id']];
     }
 }
 
@@ -122,29 +89,3 @@ if (!empty($transitions)) {
 }
 
 exit(0);
-
-// ─────────────────────────────────────────────────────────────────────────────
-
-function notifyTransitions(Database $db, array $transitions): void
-{
-    $tokenRows = $db->fetchAll("SELECT expo_push_token FROM device_tokens WHERE is_active = 1");
-    $tokens = array_column($tokenRows, 'expo_push_token');
-    if (empty($tokens)) {
-        echo "[stock-poller] " . count($transitions) . " transition(s) detected but no active push tokens registered\n";
-        return;
-    }
-
-    foreach ($transitions as $t) {
-        $listing = $t['listing'];
-        $title = 'PS5 in stock!';
-        $name = $listing['product_name'] ?: 'PS5 listing';
-        $storeName = str_replace('_', ' ', $listing['store']);
-        $body = "{$name} is deliverable to {$listing['pincode']} on " . ucwords($storeName);
-
-        $tickets = ExpoPush::send($tokens, $title, $body, ['url' => $listing['url']]);
-        ExpoPush::deactivateStaleTokens($db, $tokens, $tickets);
-
-        $db->execute("UPDATE stock_check_log SET notified = 1 WHERE id = ?", [$t['log_id']]);
-        echo "[stock-poller] pushed notification for listing {$listing['id']}\n";
-    }
-}

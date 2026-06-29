@@ -17,16 +17,22 @@ Start the PS5 Tracker backend and mobile app for local development.
 
 ## Run
 
-1. **PHP API**:
+1. **PHP API** — already auto-started on this machine via the `PS5TrackerDevServer` Windows Scheduled Task (logon trigger, runs `server/run-dev-server.cmd` → `php -S localhost:8000`, output logged to `server/ps5_tracker_dev_server.log`). Check/restart it instead of starting a second instance manually:
+   ```powershell
+   schtasks /query /tn "PS5TrackerDevServer" /v /fo list   # Status should be "Running"
+   schtasks /end /tn "PS5TrackerDevServer"                  # stop it
+   schtasks /run /tn "PS5TrackerDevServer"                  # (re)start it
+   ```
+   If it's not registered (e.g. fresh machine), start it manually instead:
    ```powershell
    cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server" ; php -S localhost:8000
    ```
-   Verify: `Invoke-RestMethod http://localhost:8000/health`
+   Verify either way: `Invoke-RestMethod http://localhost:8000/health`
 2. **Add a test listing** (see the `ps5-add-listing` skill for the full per-store URL format):
    ```powershell
    cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server" ; php scripts/add_listing.php --store=vijay_sales --url="https://www.vijaysales.com/p/<sku>/<slug>" --pincode=560067 --name="Test listing"
    ```
-3. **Run the poller once manually** (normally cron-driven every 5 min in prod):
+3. **Run the poller once manually** (normally cron-driven every 30 min in prod):
    ```powershell
    cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server" ; php cron/stock_poll_worker.php
    ```
@@ -36,3 +42,5 @@ Start the PS5 Tracker backend and mobile app for local development.
 
 - No login/auth in this app — it's a personal single-user tool. `API_KEY` only gates write routes (`POST/PUT/DELETE /listings`, `POST /devices/register`); leave empty locally.
 - Of the 7 store checkers, only **Reliance Digital, Vijay Sales, Sony Center** are verified working. **Croma, Flipkart, Amazon** are intentionally stubbed (always return `error`) — confirmed Akamai/bot-blocked even from a clean dev IP. **Games The Shop** has an unverified HTML-heuristic fallback only. See `utils/storeCheckers/*.php` docblocks for full details per store.
+- Croma/Flipkart/Games The Shop/Amazon plus quick-commerce (Blinkit/Instamart) are instead covered by the local Playwright crawler (`local-crawler/`) — see the `ps5-local-crawler` skill, which also runs on this machine via a logon-triggered Scheduled Task (`PS5TrackerLocalCrawler`) and depends on `PS5TrackerDevServer` being up to have anything to report to.
+- If `PS5TrackerDevServer` is ever missing and needs re-registering: `schtasks /create` with `/sc onlogon` was denied (`Access is denied`) in this non-elevated shell, and a long-running server task also needs `ExecutionTimeLimit` set to `PT0S` (no limit) so Task Scheduler doesn't kill it after the default time budget. Create it with a throwaway `/sc minute` schedule first (works without elevation), then export/edit/reimport the XML to swap in a `<LogonTrigger>` and `<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>` — same approach documented in the `ps5-local-crawler` skill for `PS5TrackerLocalCrawler`.

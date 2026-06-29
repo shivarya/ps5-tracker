@@ -77,6 +77,13 @@ try {
     exit;
   }
 
+  // Stock report ingestion (local Playwright crawler results)
+  if (strpos($requestUri, '/stock/report') === 0) {
+    require_once __DIR__ . '/controllers/stockReportController.php';
+    handleStockReportRoutes($requestUri, $requestMethod);
+    exit;
+  }
+
   // If no route matched
   Response::error('Route not found: ' . $requestUri, 404);
 } catch (Exception $e) {
