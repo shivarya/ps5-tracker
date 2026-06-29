@@ -1,0 +1,53 @@
+{
+  "expo": {
+    "name": "PS5 Tracker",
+    "slug": "ps5-tracker-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "ps5tracker",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0E1B12"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "dev.shivarya.ps5tracker"
+    },
+    "android": {
+      "package": "dev.shivarya.ps5tracker",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundColor": "#0E1B12"
+      },
+      "permissions": [
+        "INTERNET",
+        "ACCESS_NETWORK_STATE",
+        "POST_NOTIFICATIONS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#003791",
+          "sounds": []
+        }
+      ]
+    ],
+    "extra": {
+      "apiUrl": "https://shivarya.dev/ps5_tracker",
+      "apiUrlDev": "http://localhost:8000",
+      "eas": {
+        "projectId": "REPLACE_WITH_NEW_EAS_PROJECT_ID"
+      }
+    }
+  }
+}

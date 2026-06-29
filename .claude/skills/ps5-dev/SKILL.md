@@ -1,0 +1,38 @@
+---
+name: ps5-dev
+description: Run the PS5 Tracker app locally — start the PHP API and the Expo mobile app, and run the cron poller once manually. Use to develop or test ps5-tracker.
+---
+
+Start the PS5 Tracker backend and mobile app for local development.
+
+## One-time setup
+
+1. **Server env**: `cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server" ; copy .env.example .env` — set `DB_*`, leave `API_KEY` empty for local dev (skips the write-route auth check).
+2. **Database**: ensure MySQL/MariaDB is running (XAMPP: `D:\xampp\mysql\bin\mysqld.exe --defaults-file=D:\xampp\mysql\bin\my.ini`), then:
+   ```powershell
+   & "D:\xampp\mysql\bin\mysql.exe" -u root -e "CREATE DATABASE IF NOT EXISTS ps5_tracker CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+   cmd /c '"D:\xampp\mysql\bin\mysql.exe" -u root ps5_tracker < "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server\database\schema.sql"'
+   ```
+3. **Mobile deps**: `cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\mobile" ; npm install --legacy-peer-deps`
+
+## Run
+
+1. **PHP API**:
+   ```powershell
+   cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server" ; php -S localhost:8000
+   ```
+   Verify: `Invoke-RestMethod http://localhost:8000/health`
+2. **Add a test listing** (see the `ps5-add-listing` skill for the full per-store URL format):
+   ```powershell
+   cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server" ; php scripts/add_listing.php --store=vijay_sales --url="https://www.vijaysales.com/p/<sku>/<slug>" --pincode=560067 --name="Test listing"
+   ```
+3. **Run the poller once manually** (normally cron-driven every 5 min in prod):
+   ```powershell
+   cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server" ; php cron/stock_poll_worker.php
+   ```
+4. **Mobile app**: `cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\mobile" ; npm start` (set `app.json` `extra.apiUrlDev` to your local API URL if testing on a device/emulator that can't reach `localhost` directly — e.g. via `adb reverse tcp:8000 tcp:8000`).
+
+## Notes
+
+- No login/auth in this app — it's a personal single-user tool. `API_KEY` only gates write routes (`POST/PUT/DELETE /listings`, `POST /devices/register`); leave empty locally.
+- Of the 7 store checkers, only **Reliance Digital, Vijay Sales, Sony Center** are verified working. **Croma, Flipkart, Amazon** are intentionally stubbed (always return `error`) — confirmed Akamai/bot-blocked even from a clean dev IP. **Games The Shop** has an unverified HTML-heuristic fallback only. See `utils/storeCheckers/*.php` docblocks for full details per store.

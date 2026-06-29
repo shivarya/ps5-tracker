@@ -1,0 +1,13 @@
+{
+  "name": "shivarya/ps5-tracker-server",
+  "description": "PS5 stock tracker PHP backend",
+  "type": "project",
+  "require": {
+    "php": ">=8.0"
+  },
+  "config": {
+    "platform": {
+      "php": "8.0"
+    }
+  }
+}
