@@ -166,6 +166,17 @@ apiUrl=https://shivarya.dev/ps5_tracker   apiUrlDev=http://10.0.2.2:8000
 
 Full step-by-step: [server/CPANEL_DEPLOYMENT.md](server/CPANEL_DEPLOYMENT.md). Short version: cPanel MySQL DB + import `schema.sql` (+ apply `database/migrations/001_add_quick_commerce_stores.sql` if the DB predates it), deploy `server/` to `~/public_html/ps5_tracker`, `.env` (600), cron entry `*/30 * * * * php ~/public_html/ps5_tracker/cron/stock_poll_worker.php`.
 
-Mobile distribution: this is a personal tool — an EAS internal-distribution build (install via QR, no Play Console setup) is likely sufficient; Play Store listing is unnecessary unless that changes.
+Mobile distribution: this is a personal tool — direct sideload of a locally-built release APK, no Play Store. Built locally via gradle (not EAS cloud build — EAS Build's remote builder can't see `google-services.json` since it's gitignored, and would additionally need a one-time interactive keystore-generation step neither of which the local build needs):
+```powershell
+# android/gradle.properties: reactNativeArchitectures=arm64-v8a,x86_64 (already set)
+cmd /c "mklink /J C:\p C:\Users\Ash\Documents\Projects\apps\ps5-tracker\mobile"
+cd C:\p\android
+.\gradlew.bat assembleRelease -x lint -x test
+# APK lands at mobile/android/app/build/outputs/apk/release/app-release.apk
+cmd /c "rmdir C:\p"
+```
+Signed with the auto-generated debug keystore (`android/app/build.gradle`'s `release` build type intentionally reuses `signingConfigs.debug`) — fine for sideloading, would need a real release keystore (`eas credentials`, interactive) if ever submitted to Play Store. See the root `CLAUDE.md`'s "Windows build gotchas" section for the `MAX_PATH`/junction mechanics this build needs.
+
+**Real bug found and fixed 2026-06-30, release-build-only crash**: `assembleRelease` produced an APK that crashed instantly on launch with `[runtime not ready]: ReferenceError: Property 'FormData' doesn't exist` (SIGABRT, `mqt_v_js` thread) — never reproduced in the dev-client build tested earlier, because dev-client mode serves JS live from Metro's dev server, never exercising the actual embedded-bundle code path. Root cause: axios's `package.json` correctly declares a `"react-native"` export condition pointing at its browser-safe build (`dist/browser/axios.cjs`), but Metro wasn't honoring it — it resolved to axios's raw `lib/` source instead, which pulls in `lib/platform/node/classes/FormData.js` (`import _FormData from 'form-data'`, the Node-only npm package), crashing at JS-bundle-evaluation time. Deferring the app's own early network calls (`setTimeout`) did **not** fix it — the crash came from axios's own module-scope code running at *import* time, not from when the app actually calls it. Fixed with `mobile/metro.config.js` setting `resolver.unstable_enablePackageExports = true` and `resolver.unstable_conditionNames = ['react-native', 'require', 'default']`, which makes Metro honor the export condition axios already ships. If any future dependency shows similarly inexplicable release-only crashes referencing a global that should obviously exist, suspect the same Metro package-exports gap before anything else.
 
 Local crawler distribution: runs only on the user's own Windows machine, registered via Windows Task Scheduler (see `ps5-local-crawler` skill) — not deployed anywhere, no server component beyond the `/stock/report` endpoint it talks to.
