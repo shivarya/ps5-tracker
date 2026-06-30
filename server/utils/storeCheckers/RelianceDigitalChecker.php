@@ -47,45 +47,54 @@ class RelianceDigitalChecker implements StoreCheckerInterface
       'state' => '',
     ]);
 
+    // Cookie jar is per-listing but not reused across separate check() calls — a stale
+    // cross-poll session caused a real, hard-to-diagnose bug in SonyCenterChecker.php (an
+    // accumulating abandoned-cart quantity), so every checker using this sys_get_temp_dir()
+    // pattern now cleans up its jar after each check rather than letting cron polls 30
+    // minutes apart silently share state.
     $cookieJar = sys_get_temp_dir() . '/ps5_rd_' . md5($url) . '.cookies';
-    $res = HttpClient::get($apiUrl, $cookieJar, [
-      'Authorization: Bearer ' . self::STOREFRONT_TOKEN,
-      'x-location-detail: ' . $locationHeader,
-      'x-currency-code: INR',
-      'Accept: application/json, text/plain, */*',
-    ], $url);
+    try {
+      $res = HttpClient::get($apiUrl, $cookieJar, [
+        'Authorization: Bearer ' . self::STOREFRONT_TOKEN,
+        'x-location-detail: ' . $locationHeader,
+        'x-currency-code: INR',
+        'Accept: application/json, text/plain, */*',
+      ], $url);
 
-    if (!$res['ok']) {
-      return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => $res['error']];
-    }
-    if (HttpClient::looksBlocked((int)$res['http_status'], $res['body'])) {
-      return ['status' => 'blocked', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => null];
-    }
-    if ($res['http_status'] !== 200) {
-      return ['status' => 'error', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => 'Unexpected HTTP status'];
-    }
-
-    $decoded = json_decode($res['body'], true);
-    if (!is_array($decoded) || !isset($decoded['sellable'])) {
-      return ['status' => 'error', 'http_status' => 200, 'raw' => substr($res['body'], 0, 500), 'error' => 'Unexpected response shape — endpoint may have changed'];
-    }
-
-    $sizes = $decoded['sizes'] ?? [];
-    $anyAvailable = false;
-    foreach ($sizes as $size) {
-      if (!empty($size['is_available']) && (int)($size['quantity'] ?? 0) > 0) {
-        $anyAvailable = true;
-        break;
+      if (!$res['ok']) {
+        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => $res['error']];
       }
-    }
-    $inStock = !empty($decoded['sellable']) && $anyAvailable;
+      if (HttpClient::looksBlocked((int)$res['http_status'], $res['body'])) {
+        return ['status' => 'blocked', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => null];
+      }
+      if ($res['http_status'] !== 200) {
+        return ['status' => 'error', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => 'Unexpected HTTP status'];
+      }
 
-    return [
-      'status' => $inStock ? 'in_stock' : 'out_of_stock',
-      'http_status' => 200,
-      'raw' => substr($res['body'], 0, 500),
-      'error' => null,
-    ];
+      $decoded = json_decode($res['body'], true);
+      if (!is_array($decoded) || !isset($decoded['sellable'])) {
+        return ['status' => 'error', 'http_status' => 200, 'raw' => substr($res['body'], 0, 500), 'error' => 'Unexpected response shape — endpoint may have changed'];
+      }
+
+      $sizes = $decoded['sizes'] ?? [];
+      $anyAvailable = false;
+      foreach ($sizes as $size) {
+        if (!empty($size['is_available']) && (int)($size['quantity'] ?? 0) > 0) {
+          $anyAvailable = true;
+          break;
+        }
+      }
+      $inStock = !empty($decoded['sellable']) && $anyAvailable;
+
+      return [
+        'status' => $inStock ? 'in_stock' : 'out_of_stock',
+        'http_status' => 200,
+        'raw' => substr($res['body'], 0, 500),
+        'error' => null,
+      ];
+    } finally {
+      @unlink($cookieJar);
+    }
   }
 
   /** Extracts the trailing slug from a reliancedigital.in /product/{slug} URL. */
