@@ -5,6 +5,8 @@ description: Register a new PS5 product URL to track (local or production), usin
 
 Adds a row to `tracked_listings` via the CLI script `server/scripts/add_listing.php`, or via the local crawler's dashboard form (`node local-crawler/dashboard.js` → `http://localhost:5055` → "Add a tracked listing") for a no-terminal option. There's no add/edit UI in the mobile app by design — listings are managed server-side or via the dashboard only.
 
+Every listing also has an `edition`: `disc`, `digital`, or `pro` (defaults to `digital` if omitted). Both the mobile app and the dashboard filter/group by this — get it right when adding a listing, since there's no separate "fix the edition" flow beyond re-running `add_listing.php`/the form with `--edition`/an explicit edition and the same URL (upserts on the `url` unique key). **Verify the edition live before adding** — don't trust a search engine's title alone. A store's generic "Buy Now"/"Add to Cart" text is not edition-specific; check the actual page content (model number, SKU, price point — disc/pro editions are reliably priced higher than digital) the same way the Croma stock-signal bug in this project was diagnosed.
+
 ## Verified-working stores (use these with confidence)
 
 | Store | URL format | Notes |
@@ -30,13 +32,17 @@ Listings for these 6 stores are still added the same way via `add_listing.php` (
 
 ```powershell
 cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server"
-php scripts/add_listing.php --store=vijay_sales --url="https://www.vijaysales.com/p/252606/sony-playstationr5-disc-sa-e-edition-console-video-game-ps5r-slim" --pincode=560067 --name="PS5 Disc SA E Edition"
+php scripts/add_listing.php --store=vijay_sales --url="https://www.vijaysales.com/p/252606/sony-playstationr5-disc-sa-e-edition-console-video-game-ps5r-slim" --edition=disc --pincode=560067 --name="PS5 Disc SA E Edition"
 ```
 
 Run against production via SSH instead of locally:
 ```bash
-ssh cpanel "cd ~/public_html/ps5_tracker && php scripts/add_listing.php --store=... --url='...' --pincode=560067 --name='...'"
+ssh cpanel "cd ~/public_html/ps5_tracker && php scripts/add_listing.php --store=... --url='...' --edition=disc --pincode=560067 --name='...'"
 ```
+
+## PS5 Pro availability (checked 2026-06-30)
+
+Only **Amazon** (`https://www.amazon.in/Sony-PlayStation-Pro-2TB-SSD/dp/B0H3BP5RB3`, Sony's official storefront) carries a genuine PS5 Pro listing in India right now — verified live (real box art, "Visit the Sony Store" link), currently shows "Currently unavailable". Reliance Digital, Croma, Vijay Sales, Sony Center, Games The Shop, Blinkit, and Instamart have **no real PS5 Pro listing at all** as of this check. Flipkart's search results for "PS5 Pro" are grey-market reseller spam (nonsense SEO-stuffed titles, ~2x official pricing, one candidate URL outright 404'd) — don't add those. Re-check store-by-store if asked to add PS5 Pro again later; this could change as Sony expands India availability.
 
 The script upserts on the `url` unique key — re-running with the same URL just updates `product_name`/`pincode` rather than duplicating.
 

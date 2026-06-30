@@ -1,5 +1,6 @@
 <?php
 const VALID_STORES = ['reliance_digital', 'croma', 'vijay_sales', 'sony_center', 'games_the_shop', 'flipkart', 'amazon', 'blinkit', 'instamart'];
+const VALID_EDITIONS = ['disc', 'digital', 'pro'];
 
 function handleListingsRoutes(string $uri, string $method): void
 {
@@ -21,13 +22,17 @@ function handleListingsRoutes(string $uri, string $method): void
             if (!in_array($store, VALID_STORES, true)) {
                 Response::error('Invalid store: ' . $store, 422);
             }
+            $edition = (string)($input['edition'] ?? 'digital');
+            if (!in_array($edition, VALID_EDITIONS, true)) {
+                Response::error('Invalid edition: ' . $edition, 422);
+            }
             $url = (string)$input['url'];
             $pincode = (string)($input['pincode'] ?? DEFAULT_PINCODE);
             $productName = $input['product_name'] ?? null;
 
             $id = $db->insert(
-                "INSERT INTO tracked_listings (store, url, product_name, pincode) VALUES (?, ?, ?, ?)",
-                [$store, $url, $productName, $pincode]
+                "INSERT INTO tracked_listings (store, edition, url, product_name, pincode) VALUES (?, ?, ?, ?, ?)",
+                [$store, $edition, $url, $productName, $pincode]
             );
             Response::success($db->fetchOne("SELECT * FROM tracked_listings WHERE id = ?", [$id]), 'Listing added', 201);
         }
@@ -47,6 +52,13 @@ function handleListingsRoutes(string $uri, string $method): void
                     $fields[] = "$field = ?";
                     $params[] = $input[$field];
                 }
+            }
+            if (array_key_exists('edition', $input)) {
+                if (!in_array($input['edition'], VALID_EDITIONS, true)) {
+                    Response::error('Invalid edition: ' . $input['edition'], 422);
+                }
+                $fields[] = "edition = ?";
+                $params[] = $input['edition'];
             }
             if (empty($fields)) {
                 Response::error('No updatable fields provided', 422);

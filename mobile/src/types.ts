@@ -28,9 +28,18 @@ export const LOCAL_CRAWLER_STORES: StoreName[] = [
 
 export type ListingStatus = 'unknown' | 'in_stock' | 'out_of_stock' | 'blocked' | 'error';
 
+export type Edition = 'disc' | 'digital' | 'pro';
+
+export const EDITION_LABELS: Record<Edition, string> = {
+  disc: 'Disc',
+  digital: 'Digital',
+  pro: 'Pro',
+};
+
 export interface Listing {
   id: number;
   store: StoreName;
+  edition: Edition;
   url: string;
   product_name: string | null;
   pincode: string;

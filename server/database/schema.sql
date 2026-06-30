@@ -3,6 +3,7 @@
 CREATE TABLE IF NOT EXISTS tracked_listings (
   id INT AUTO_INCREMENT PRIMARY KEY,
   store ENUM('reliance_digital','croma','vijay_sales','sony_center','games_the_shop','flipkart','amazon','blinkit','instamart') NOT NULL,
+  edition ENUM('disc','digital','pro') NOT NULL DEFAULT 'digital',
   url VARCHAR(1000) NOT NULL,
   product_name VARCHAR(255) NULL,
   pincode VARCHAR(10) NOT NULL DEFAULT '560067',

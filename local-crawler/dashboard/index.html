@@ -32,6 +32,11 @@
   form#add-listing button:hover { background: #1b4332; }
   form#add-listing button:disabled { background: #333; color: #777; cursor: default; }
   #add-listing-message { margin-top: 10px; font-size: 13px; }
+  .filter-row { display: flex; gap: 8px; margin-bottom: 12px; }
+  .filter-chip { background: #1c1c1c; color: #ccc; border: 1px solid #3a3a3a; border-radius: 14px; padding: 5px 14px; font-size: 13px; cursor: pointer; }
+  .filter-chip:hover { background: #262626; }
+  .filter-chip.active { background: #2d6a4f; color: #eee; border-color: #2d6a4f; }
+  .section-header td { padding-top: 18px; padding-bottom: 4px; color: #999; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; border-bottom: none; }
 </style>
 </head>
 <body>
@@ -53,6 +58,13 @@
         <option value="instamart">Instamart</option>
       </select>
     </label>
+    <label>Edition
+      <select name="edition">
+        <option value="digital">Digital</option>
+        <option value="disc">Disc</option>
+        <option value="pro">Pro</option>
+      </select>
+    </label>
     <label>Product URL
       <input type="url" name="url" placeholder="https://..." required />
     </label>
@@ -67,6 +79,12 @@
   <div id="add-listing-message"></div>
 
   <h2>Current listing status (all tracked listings)</h2>
+  <div class="filter-row" id="edition-filter">
+    <button class="filter-chip active" data-edition="all">All</button>
+    <button class="filter-chip" data-edition="disc">Disc</button>
+    <button class="filter-chip" data-edition="digital">Digital</button>
+    <button class="filter-chip" data-edition="pro">Pro</button>
+  </div>
   <table id="status-table">
     <thead><tr><th>Store</th><th>Product</th><th>URL</th><th>Pincode</th><th>Polled by</th><th>Status</th><th>Last checked</th></tr></thead>
     <tbody id="status-body"><tr><td colspan="7" class="empty">loading…</td></tr></tbody>
@@ -80,6 +98,11 @@
 
 <script>
 const LOCAL_STORES = ['croma', 'flipkart', 'games_the_shop', 'amazon', 'blinkit', 'instamart'];
+const EDITION_ORDER = ['disc', 'digital', 'pro'];
+const EDITION_LABELS = { disc: 'Disc', digital: 'Digital', pro: 'Pro' };
+
+let editionFilter = 'all';
+let lastStatusData = [];
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -98,32 +121,67 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString();
 }
 
+function listingRow(l) {
+  return `
+    <tr>
+      <td>${esc(storeLabel(l.store))}</td>
+      <td>${esc(l.product_name || '—')}</td>
+      <td><a href="${esc(l.url)}" target="_blank" rel="noopener" style="color:#7aa2e0; word-break: break-all;">${esc(l.url)}</a></td>
+      <td>${esc(l.pincode)}</td>
+      <td>${LOCAL_STORES.includes(l.store) ? 'local crawler' : 'server cron'}</td>
+      <td>${badge(l.last_status)}</td>
+      <td>${fmtTime(l.last_checked_at)}</td>
+    </tr>
+  `;
+}
+
+function renderStatusTable() {
+  const body = document.getElementById('status-body');
+  const data = lastStatusData;
+  if (data.length === 0) {
+    body.innerHTML = '<tr><td colspan="7" class="empty">No listings tracked yet — use the form above.</td></tr>';
+    return;
+  }
+  const visible = editionFilter === 'all' ? data : data.filter((l) => l.edition === editionFilter);
+  if (visible.length === 0) {
+    body.innerHTML = `<tr><td colspan="7" class="empty">No ${EDITION_LABELS[editionFilter] || ''} listings tracked yet.</td></tr>`;
+    return;
+  }
+  if (editionFilter !== 'all') {
+    const sorted = [...visible].sort((a, b) => a.store.localeCompare(b.store));
+    body.innerHTML = sorted.map(listingRow).join('');
+    return;
+  }
+  // "All" view: grouped by edition, each group sorted by store, same as the mobile app.
+  body.innerHTML = EDITION_ORDER
+    .map((edition) => {
+      const group = visible.filter((l) => l.edition === edition).sort((a, b) => a.store.localeCompare(b.store));
+      if (group.length === 0) return '';
+      return `<tr class="section-header"><td colspan="7">${EDITION_LABELS[edition]}</td></tr>` + group.map(listingRow).join('');
+    })
+    .join('');
+}
+
 async function loadStatus() {
   const body = document.getElementById('status-body');
   try {
     const res = await fetch('/api/status');
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    if (data.length === 0) {
-      body.innerHTML = '<tr><td colspan="7" class="empty">No listings tracked yet — use the form above.</td></tr>';
-      return;
-    }
-    const sorted = [...data].sort((a, b) => a.store.localeCompare(b.store));
-    body.innerHTML = sorted.map((l) => `
-      <tr>
-        <td>${esc(storeLabel(l.store))}</td>
-        <td>${esc(l.product_name || '—')}</td>
-        <td><a href="${esc(l.url)}" target="_blank" rel="noopener" style="color:#7aa2e0; word-break: break-all;">${esc(l.url)}</a></td>
-        <td>${esc(l.pincode)}</td>
-        <td>${LOCAL_STORES.includes(l.store) ? 'local crawler' : 'server cron'}</td>
-        <td>${badge(l.last_status)}</td>
-        <td>${fmtTime(l.last_checked_at)}</td>
-      </tr>
-    `).join('');
+    lastStatusData = data;
+    renderStatusTable();
   } catch (err) {
     body.innerHTML = `<tr><td colspan="7" class="err">Failed to load: ${err.message}</td></tr>`;
   }
 }
+
+document.getElementById('edition-filter').addEventListener('click', (e) => {
+  const btn = e.target.closest('.filter-chip');
+  if (!btn) return;
+  editionFilter = btn.dataset.edition;
+  document.querySelectorAll('#edition-filter .filter-chip').forEach((b) => b.classList.toggle('active', b === btn));
+  renderStatusTable();
+});
 
 async function loadRuns() {
   const body = document.getElementById('runs-body');
@@ -170,6 +228,7 @@ document.getElementById('add-listing').addEventListener('submit', async (e) => {
   const msg = document.getElementById('add-listing-message');
   const payload = {
     store: form.store.value,
+    edition: form.edition.value,
     url: form.url.value.trim(),
     product_name: form.product_name.value.trim() || undefined,
     pincode: form.pincode.value.trim() || undefined,

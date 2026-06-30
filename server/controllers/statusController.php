@@ -7,7 +7,7 @@ function handleStatusRoutes(string $uri, string $method): void
 
     $db = getDB();
     $listings = $db->fetchAll(
-        "SELECT id, store, url, product_name, pincode, is_active, last_status, last_checked_at, last_status_changed_at
+        "SELECT id, store, edition, url, product_name, pincode, is_active, last_status, last_checked_at, last_status_changed_at
          FROM tracked_listings
          WHERE is_active = 1
          ORDER BY store, product_name"
