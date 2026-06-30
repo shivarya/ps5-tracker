@@ -15,7 +15,10 @@ export default function ListingsScreen() {
   const load = useCallback(async () => {
     try {
       const res = await api.getStatus();
-      setListings(res.data);
+      // Mirrors the local dashboard's sort (store.localeCompare) so the app and the web
+      // dashboard always present tracked listings in the same order.
+      const sorted = [...res.data].sort((a, b) => a.store.localeCompare(b.store));
+      setListings(sorted);
     } catch (err) {
       console.warn('Failed to load status', err);
     }
@@ -23,6 +26,10 @@ export default function ListingsScreen() {
 
   useEffect(() => {
     load().finally(() => setLoading(false));
+    // Poll on the same 30s cadence as the local dashboard, so a fresh crawl result (server
+    // cron or local crawler) shows up here without the user needing to pull-to-refresh.
+    const interval = setInterval(load, 30000);
+    return () => clearInterval(interval);
   }, [load]);
 
   const onRefresh = useCallback(async () => {

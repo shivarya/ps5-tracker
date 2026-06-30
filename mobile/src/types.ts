@@ -11,7 +11,20 @@ export type StoreName =
   | 'sony_center'
   | 'games_the_shop'
   | 'flipkart'
-  | 'amazon';
+  | 'amazon'
+  | 'blinkit'
+  | 'instamart';
+
+// Stores polled by the local Playwright crawler rather than the server cron worker — kept in sync
+// with local-crawler/index.js's LOCAL_STORES and the dashboard's identical constant.
+export const LOCAL_CRAWLER_STORES: StoreName[] = [
+  'croma',
+  'flipkart',
+  'games_the_shop',
+  'amazon',
+  'blinkit',
+  'instamart',
+];
 
 export type ListingStatus = 'unknown' | 'in_stock' | 'out_of_stock' | 'blocked' | 'error';
 

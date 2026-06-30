@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
 
 import { useTheme } from '../contexts/ThemeContext';
-import { Listing, StoreName } from '../types';
+import { Listing, StoreName, LOCAL_CRAWLER_STORES } from '../types';
 
 const STORE_LABELS: Record<StoreName, string> = {
   reliance_digital: 'Reliance Digital',
@@ -12,6 +12,8 @@ const STORE_LABELS: Record<StoreName, string> = {
   games_the_shop: 'Games The Shop',
   flipkart: 'Flipkart',
   amazon: 'Amazon',
+  blinkit: 'Blinkit',
+  instamart: 'Instamart',
 };
 
 function statusColor(status: Listing['last_status'], colors: ReturnType<typeof useTheme>['colors']) {
@@ -56,6 +58,7 @@ function relativeTime(iso: string | null): string {
 
 export default function ListingCard({ listing }: { listing: Listing }) {
   const { colors } = useTheme();
+  const polledBy = LOCAL_CRAWLER_STORES.includes(listing.store) ? 'local crawler' : 'server cron';
 
   return (
     <TouchableOpacity
@@ -74,8 +77,11 @@ export default function ListingCard({ listing }: { listing: Listing }) {
       <Text style={[styles.name, { color: colors.text }]} numberOfLines={2}>
         {listing.product_name || listing.url}
       </Text>
+      <Text style={[styles.url, { color: colors.primary }]} numberOfLines={1}>
+        {listing.url}
+      </Text>
       <Text style={[styles.meta, { color: colors.textSecondary }]}>
-        Pincode {listing.pincode} · checked {relativeTime(listing.last_checked_at)}
+        Pincode {listing.pincode} · checked {relativeTime(listing.last_checked_at)} · {polledBy}
       </Text>
     </TouchableOpacity>
   );
@@ -118,6 +124,10 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     marginBottom: 4,
+  },
+  url: {
+    fontSize: 11,
+    marginBottom: 6,
   },
   meta: {
     fontSize: 12,
