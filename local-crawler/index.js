@@ -20,6 +20,20 @@ const CHECKERS = {
 
 const LOCAL_STORES = Object.keys(CHECKERS);
 
+// Backup checkers for the 3 stores the server cron worker owns (reliance_digital, vijay_sales,
+// sony_center). These are NOT polled unconditionally like LOCAL_STORES above — that would race the
+// cron worker and reintroduce the dual-poller clobbering bug already hit once with Croma/Flipkart/etc
+// (see stock_poll_worker.php's docblock). Instead, index.js only checks a backup-store listing when
+// the server's last reported status for it is already `blocked`/`error` — this machine's residential
+// IP doesn't carry the shared-hosting IP's reputation problem, so it can often "rescue" a listing the
+// server-side curl checker is currently stuck on, without ever fighting over a healthy listing.
+const BACKUP_CHECKERS = {
+  reliance_digital: require('./checkers/relianceDigital'),
+  vijay_sales: require('./checkers/vijaySales'),
+  sony_center: require('./checkers/sonyCenter'),
+};
+const BACKUP_TRIGGER_STATUSES = ['blocked', 'error'];
+
 function jitter() {
   const ms = 500 + Math.floor(Math.random() * 3500);
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -34,9 +48,13 @@ const api = axios.create({
 async function main() {
   const startedAt = new Date().toISOString();
   const { data } = await api.get('/status');
-  const listings = (data?.data || []).filter(
-    (l) => l.is_active && LOCAL_STORES.includes(l.store)
-  );
+  const allListings = data?.data || [];
+  const listings = allListings.filter((l) => {
+    if (!l.is_active) return false;
+    if (LOCAL_STORES.includes(l.store)) return true;
+    if (BACKUP_CHECKERS[l.store]) return BACKUP_TRIGGER_STATUSES.includes(l.last_status);
+    return false;
+  });
 
   if (listings.length === 0) {
     console.log('[local-crawler] no local-store listings to check');
@@ -54,7 +72,11 @@ async function main() {
   try {
     for (const listing of listings) {
       const page = await context.newPage();
-      const checker = CHECKERS[listing.store];
+      const isBackup = !LOCAL_STORES.includes(listing.store);
+      const checker = isBackup ? BACKUP_CHECKERS[listing.store] : CHECKERS[listing.store];
+      if (isBackup) {
+        console.log(`[local-crawler] listing ${listing.id} (${listing.store}): running backup check (server status was '${listing.last_status}')`);
+      }
       let result;
       try {
         result = await checker.check(page, listing.url, listing.pincode || DEFAULT_PINCODE, listing.product_name);

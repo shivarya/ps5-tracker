@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
 
 import { useTheme } from '../contexts/ThemeContext';
-import { Listing, StoreName, LOCAL_CRAWLER_STORES } from '../types';
+import { Listing, StoreName, LOCAL_CRAWLER_STORES, BACKUP_STORES } from '../types';
 
 const STORE_LABELS: Record<StoreName, string> = {
   reliance_digital: 'Reliance Digital',
@@ -15,6 +15,12 @@ const STORE_LABELS: Record<StoreName, string> = {
   blinkit: 'Blinkit',
   instamart: 'Instamart',
 };
+
+function polledByLabel(store: StoreName): string {
+  if (LOCAL_CRAWLER_STORES.includes(store)) return 'local crawler';
+  if (BACKUP_STORES.includes(store)) return 'server cron (+ local backup)';
+  return 'server cron';
+}
 
 function statusColor(status: Listing['last_status'], colors: ReturnType<typeof useTheme>['colors']) {
   switch (status) {
@@ -58,7 +64,7 @@ function relativeTime(iso: string | null): string {
 
 export default function ListingCard({ listing }: { listing: Listing }) {
   const { colors } = useTheme();
-  const polledBy = LOCAL_CRAWLER_STORES.includes(listing.store) ? 'local crawler' : 'server cron';
+  const polledBy = polledByLabel(listing.store);
 
   return (
     <TouchableOpacity

@@ -98,8 +98,17 @@
 
 <script>
 const LOCAL_STORES = ['croma', 'flipkart', 'games_the_shop', 'amazon', 'blinkit', 'instamart'];
+// Server-cron stores that the local crawler also backs up when the server-side check is
+// blocked/error (index.js's BACKUP_CHECKERS) — not unconditional like LOCAL_STORES.
+const BACKUP_STORES = ['reliance_digital', 'vijay_sales', 'sony_center'];
 const EDITION_ORDER = ['disc', 'digital', 'pro'];
 const EDITION_LABELS = { disc: 'Disc', digital: 'Digital', pro: 'Pro' };
+
+function polledByLabel(store) {
+  if (LOCAL_STORES.includes(store)) return 'local crawler';
+  if (BACKUP_STORES.includes(store)) return 'server cron (+ local backup)';
+  return 'server cron';
+}
 
 let editionFilter = 'all';
 let lastStatusData = [];
@@ -128,7 +137,7 @@ function listingRow(l) {
       <td>${esc(l.product_name || '—')}</td>
       <td><a href="${esc(l.url)}" target="_blank" rel="noopener" style="color:#7aa2e0; word-break: break-all;">${esc(l.url)}</a></td>
       <td>${esc(l.pincode)}</td>
-      <td>${LOCAL_STORES.includes(l.store) ? 'local crawler' : 'server cron'}</td>
+      <td>${polledByLabel(l.store)}</td>
       <td>${badge(l.last_status)}</td>
       <td>${fmtTime(l.last_checked_at)}</td>
     </tr>

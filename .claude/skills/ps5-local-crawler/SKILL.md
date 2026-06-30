@@ -1,9 +1,11 @@
 ---
 name: ps5-local-crawler
-description: Install, run, schedule, and monitor the local Windows Playwright crawler for PS5 Tracker retailers blocked from shared hosting (Croma, Flipkart, Games The Shop, Amazon, Blinkit, Instamart). Use when developing/testing the local crawler, registering/removing its Task Scheduler entry, or viewing its dashboard.
+description: Install, run, schedule, and monitor the local Windows Playwright crawler for PS5 Tracker retailers blocked from shared hosting (Croma, Flipkart, Games The Shop, Amazon, Blinkit, Instamart), plus its backup-check role for the 3 server-cron stores (Reliance Digital, Vijay Sales, Sony Center). Use when developing/testing the local crawler, registering/removing its Task Scheduler entry, or viewing its dashboard.
 ---
 
 The local crawler (`local-crawler/`) covers retailers the cPanel server can't reach (Akamai/PerimeterX-blocked, or quick-commerce stock that's purely location-driven). It runs a real headed Chromium via Playwright on this Windows machine, reports results to the same backend the cron worker writes to (`POST /stock/report`), and fires a Windows toast locally on a stock-in transition — in addition to the existing Expo push to the phone. Every run also appends to `local-crawler/logs/runs.jsonl`, viewable in the local dashboard (`dashboard.js`).
+
+**Also backs up the 3 server-cron stores since 2026-06-30** (`checkers/relianceDigital.js`, `vijaySales.js`, `sonyCenter.js`, registered as `BACKUP_CHECKERS` in `index.js`) — these mirror the server-side PHP checkers' exact API calls (no browser needed, just axios from this machine's residential IP) but are only *run* for a listing when `GET /status` shows that listing's `last_status` is already `blocked` or `error`. This is deliberately conditional, not unconditional like `LOCAL_STORES` — checking a healthy listing too would race the cron worker and reintroduce the dual-poller clobbering bug already hit once (see `stock_poll_worker.php`'s docblock). The dashboard/mobile "Polled by" column shows `server cron (+ local backup)` for these 3 to reflect this.
 
 ## One-time setup
 
@@ -38,7 +40,7 @@ Opens a browser — enter your phone number + OTP. On success, saves a token to 
 cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\local-crawler" ; node index.js
 ```
 
-This fetches `GET {API_URL}/status`, filters to listings whose `store` is `croma`, `flipkart`, `games_the_shop`, `amazon`, `blinkit`, or `instamart`, runs each through its checker, batch-POSTs results to `/stock/report`, and fires a toast for any reported transition. All 6 stores are verified working as of 2026-06-30 (see `CLAUDE.md`'s per-store table) — `error`/`blocked` on a given run usually means a genuine transient issue (Amazon's pincode-update endpoint rate-limits occasionally; Instamart needs a valid Swiggy login), not a broken selector.
+This fetches `GET {API_URL}/status`, runs every listing whose `store` is `croma`, `flipkart`, `games_the_shop`, `amazon`, `blinkit`, or `instamart` unconditionally (`LOCAL_STORES`), plus any `reliance_digital`/`vijay_sales`/`sony_center` listing whose `last_status` is currently `blocked`/`error` (`BACKUP_CHECKERS` — see the intro above), batch-POSTs results to `/stock/report`, and fires a toast for any reported transition. All 6 `LOCAL_STORES` are verified working as of 2026-06-30 (see `CLAUDE.md`'s per-store table) — `error`/`blocked` on a given run usually means a genuine transient issue (Amazon's pincode-update endpoint rate-limits occasionally; Instamart needs a valid Swiggy login), not a broken selector.
 
 ## Dashboard
 

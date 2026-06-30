@@ -26,6 +26,10 @@ export const LOCAL_CRAWLER_STORES: StoreName[] = [
   'instamart',
 ];
 
+// Server-cron stores the local crawler also backs up when the server-side check is blocked/error
+// (index.js's BACKUP_CHECKERS) — not unconditional like LOCAL_CRAWLER_STORES, only a fallback.
+export const BACKUP_STORES: StoreName[] = ['reliance_digital', 'vijay_sales', 'sony_center'];
+
 export type ListingStatus = 'unknown' | 'in_stock' | 'out_of_stock' | 'blocked' | 'error';
 
 export type Edition = 'disc' | 'digital' | 'pro';
