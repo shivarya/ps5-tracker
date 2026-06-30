@@ -19,6 +19,7 @@
     },
     "android": {
       "package": "dev.shivarya.ps5tracker",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundColor": "#0E1B12"
