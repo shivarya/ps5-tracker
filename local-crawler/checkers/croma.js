@@ -35,6 +35,21 @@
  * from that SAME text snapshot — no separate delay/re-fetch between "pincode confirmed" and "scan
  * stock" that could itself cross the revert boundary. If the pincode is never confirmed showing
  * within the poll window, returns `error` (not a guess) rather than trusting whatever's on screen.
+ *
+ * THIRD BUG FOUND AND FIXED 2026-06-30 (the previous two fixes were real but didn't catch this —
+ * user reported "croma still shows in stock" a second time and it was worth re-investigating rather
+ * than assuming it was already fixed): "Buy Now"/"Add to Cart" text is present on the page
+ * REGARDLESS of pincode deliverability — confirmed live that even with the pincode correctly
+ * confirmed as the tracked 560067, the page *simultaneously* shows "Delivery at: Bengaluru, 560067.
+ * Not Available for your pincode" while "Buy Now"/"Add to Cart" text is still present elsewhere
+ * (almost certainly an in-store-pickup/global-sellability signal, unrelated to home delivery to the
+ * tracked pincode). This means the generic Buy-Now/Add-to-Cart heuristic was NEVER a reliable
+ * pincode-aware stock signal for this store — it would report `in_stock` even when Croma explicitly
+ * tells a real user the item can't be delivered to them. Fixed by checking the "Delivery at: ..."
+ * section specifically: "Not Available for your pincode" there now means `out_of_stock`, its absence
+ * (with the delivery section present and confirmed against the tracked pincode) means `in_stock`. The
+ * generic Buy-Now/Sold-Out scan is kept only as a fallback for when the delivery section can't be
+ * found at all (defensive — not the primary signal anymore).
  */
 const { scanBodyForStockMarkers, looksBlocked } = require('../utils/pageHelpers');
 
@@ -97,6 +112,18 @@ async function check(page, url, pincode) {
   if (looksBlocked(confirmedText)) {
     return { status: 'blocked', http_status: httpStatus, raw: confirmedText.slice(0, 2000), error: null };
   }
+
+  // Primary signal: the pincode-specific "Delivery at: ..." section — Buy Now/Add to Cart text is
+  // present regardless of deliverability, so it's checked only as a fallback below.
+  const deliveryIdx = lower.indexOf('delivery at');
+  if (deliveryIdx >= 0) {
+    const deliverySection = lower.slice(deliveryIdx, deliveryIdx + 200);
+    if (deliverySection.includes(pincode)) {
+      const status = deliverySection.includes('not available for your pincode') ? 'out_of_stock' : 'in_stock';
+      return { status, http_status: httpStatus, raw: confirmedText.slice(deliveryIdx, deliveryIdx + 200), error: null };
+    }
+  }
+
   if (lower.includes('sold out') || lower.includes('out of stock') || lower.includes('notify me')) {
     return { status: 'out_of_stock', http_status: httpStatus, raw: confirmedText.slice(0, 500), error: null };
   }
