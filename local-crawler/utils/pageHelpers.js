@@ -17,10 +17,10 @@ async function scanBodyForStockMarkers(page) {
   }
   const lower = bodyText.toLowerCase();
   if (lower.includes('sold out') || lower.includes('out of stock') || lower.includes('notify me')) {
-    return { status: 'out_of_stock', raw: '', error: null };
+    return { status: 'out_of_stock', raw: bodyText.slice(0, 500), error: null };
   }
   if (lower.includes('add to cart') || lower.includes('buy now')) {
-    return { status: 'in_stock', raw: '', error: null };
+    return { status: 'in_stock', raw: bodyText.slice(0, 500), error: null };
   }
   return {
     status: 'error',

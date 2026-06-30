@@ -44,10 +44,11 @@
     ],
     "extra": {
       "apiUrl": "https://shivarya.dev/ps5_tracker",
-      "apiUrlDev": "http://localhost:8000",
+      "apiUrlDev": "http://10.0.2.2:8000",
       "eas": {
-        "projectId": "REPLACE_WITH_NEW_EAS_PROJECT_ID"
+        "projectId": "baa830eb-c009-48d8-8b3a-86c0488b790e"
       }
-    }
+    },
+    "owner": "shivarya3"
   }
 }

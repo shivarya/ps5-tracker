@@ -42,6 +42,15 @@ This fetches `GET {API_URL}/status`, filters to listings whose `store` is `croma
 
 ## Dashboard
 
+Auto-started at logon via the **`PS5TrackerDashboard`** Scheduled Task (`run-dashboard.cmd` → `node dashboard.js`, logged to `logs/dashboard.log`) — registered 2026-06-30, same pattern as the other two tasks below.
+
+```powershell
+schtasks /query /tn "PS5TrackerDashboard" /v /fo list   # status, last/next run time
+schtasks /run /tn "PS5TrackerDashboard"                  # (re)start it
+schtasks /end /tn "PS5TrackerDashboard"                  # stop it
+```
+
+To run it manually instead (e.g. testing, or before the task exists on a fresh machine):
 ```powershell
 cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\local-crawler" ; node dashboard.js
 ```
@@ -50,7 +59,7 @@ Open `http://localhost:5055`. Shows:
 - **Current listing status (all tracked listings)** — proxied live from `GET {API_URL}/status`, with a "Polled by" column (`local crawler` vs `server cron`) based on whether the store is one of the 6 local-crawler stores.
 - **Recent crawler runs** — the last 50 logged runs; click a row to expand per-listing results for that run.
 
-Auto-refreshes every 30s. Not itself scheduled/auto-started — run it on demand when you want to check in or add a listing. `DASHBOARD_PORT` env var overrides the port.
+Auto-refreshes every 30s. `DASHBOARD_PORT` env var overrides the port.
 
 ## Scheduled task — registered, runs automatically
 
@@ -66,10 +75,14 @@ If it's ever missing (e.g. after `schtasks /delete`) or needs rebuilding from sc
 ```powershell
 schtasks /create /tn "PS5TrackerLocalCrawler" /tr "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\local-crawler\run.cmd" /sc minute /mo 30 /ru $env:USERNAME /it /f
 schtasks /query /tn "PS5TrackerLocalCrawler" /xml > "$env:TEMP\ps5_task.xml"
-# edit the exported XML: add a <LogonTrigger><Enabled>true</Enabled></LogonTrigger> entry inside <Triggers>
+# edit the exported XML: add a <LogonTrigger><UserId>ASH-GAMING-PC\Ash</UserId><Enabled>true</Enabled></LogonTrigger> entry inside <Triggers>
 schtasks /create /tn "PS5TrackerLocalCrawler" /xml "$env:TEMP\ps5_task.xml" /f
 ```
 (A `<Repetition>` with no `<Duration>` child repeats indefinitely — don't add one.)
+
+**Two real gotchas hit registering `PS5TrackerDashboard` this way (2026-06-30), both worth knowing for any future task built with this pattern:**
+1. **`<LogonTrigger>` needs an explicit `<UserId>` child or the import is denied.** A bare `<LogonTrigger><Enabled>true</Enabled></LogonTrigger>` (no `UserId`) registers an *any-user* logon trigger, which requires admin — `schtasks /create /xml` fails with `Access is denied` in a non-elevated shell even though plain `/sc minute` task creation works fine. Scoping it to `<UserId>ASH-GAMING-PC\Ash</UserId>` (matching `whoami`'s `DOMAIN\user` form) avoids the privilege check entirely and creates without elevation.
+2. **Re-exported XML must stay UTF-16, or `schtasks /create /xml` rejects it.** `schtasks /query .. /xml >` always emits UTF-16; if that file gets rewritten through a UTF-8 tool (e.g. a plain text editor save), `schtasks /create` throws either a parse error (`unable to switch the encoding`) if the `encoding="UTF-8"` declaration is fixed to match, or a misleading generic `Access is denied` if the declaration still says `UTF-16` but the bytes are actually UTF-8. Always write the final XML back out as real UTF-16LE, e.g. in PowerShell: `[System.IO.File]::WriteAllText($path, $xmlString, [System.Text.Encoding]::Unicode)`.
 
 ## Logs
 
@@ -85,3 +98,4 @@ schtasks /create /tn "PS5TrackerLocalCrawler" /xml "$env:TEMP\ps5_task.xml" /f
 - A real bug was found and fixed during initial verification: `notifyTransitions()` in `server/utils/stockResultProcessor.php` used to `echo` debug lines, which corrupted `/stock/report`'s JSON response body when called from a web request (worked fine for the CLI cron worker, broke silently for this endpoint — axios fell back to returning the raw string instead of parsed JSON, so transitions were never detected). Now gated on `PHP_SAPI === 'cli'` vs `error_log()`.
 - A second real bug: the server cron worker used to also poll Croma/Games The Shop/Flipkart/Amazon/Blinkit/Instamart with its own (broken/stub) PHP checkers, racing with the local crawler and clobbering correct results back to `error`. Fixed by removing those 6 stores from `stock_poll_worker.php`'s `STORE_CHECKERS` map entirely — the local crawler owns them exclusively now.
 - A third real bug, found 2026-07-01: `croma.js` only knew how to click the pencil icon to open the pincode editor (for when a location was already cached from a prior visit). On a genuinely fresh browser session — which is every real scheduled run — Croma instead auto-shows the same modal immediately with no pencil icon yet, the click timed out, and the checker silently fell through to reading stock state from behind the still-open modal, against whatever pincode Croma had defaulted to rather than the tracked one (manifested as a wrong/unexpected pincode and a misleading `in_stock`). Fixed by checking whether `input.pinElem` is already visible before attempting the pencil-icon click. If you hit a similar "selector worked once but not in a scheduled run" bug elsewhere, suspect the same fresh-session-vs-cached-session UI difference first.
+- A fourth real bug, found 2026-06-30 in response to the user asking "why croma showing in stock?": the explicit pincode set via Croma's modal isn't durable — their own client JS silently reverts the header/delivery widget to an IP-geolocation default (this machine's residential IP → a different city entirely, e.g. "Mumbai, 400049" instead of the tracked 560067) somewhere between ~1.5s and ~3s after clicking "Continue", non-deterministically. The old code did one blind `waitForTimeout(1500)` then scanned once — a coin flip on which side of that race it landed, with zero signal if it lost. Fixed by polling for the tracked pincode's digits to actually appear in page text before scanning, and reading stock markers from that *same* text snapshot (no gap between "pincode confirmed" and "stock read" for the revert to land in) — returns `error` instead of guessing if the pincode never gets confirmed within the poll window. Re-verified live: 4/4 fresh runs post-fix correctly held `Bengaluru, 560067` and the in_stock reports were genuine. **General lesson**: when a checker reads page state after setting some input (pincode, location, filters), don't trust a fixed-delay-then-single-read pattern unless you've confirmed the site doesn't asynchronously revert that input — poll-until-confirmed-then-read-from-the-same-snapshot is the safer default.

@@ -21,8 +21,25 @@
  * for whatever Croma's own fallback/geo-IP-guessed pincode resolved to, never the tracked one. Fixed by
  * checking whether `input.pinElem` is already visible (auto-modal case) before attempting the
  * pencil-icon click at all.
+ *
+ * SECOND BUG FOUND AND FIXED 2026-06-30: confirming the explicit pincode set via the modal is NOT
+ * durable — Croma's own client-side JS silently reverts the header/delivery widget to an
+ * IP-geolocation-derived default (e.g. "Mumbai, 400049" from this machine's residential IP, nowhere
+ * near the tracked 560067) somewhere between ~1.5s and ~3s after the "Continue" click — confirmed via
+ * repeated live captures (`Bash` debug script, not just chrome-devtools snapshots), and the timing
+ * is non-deterministic (varied between 2s and 3s across runs). The old code did a single blind
+ * `waitForTimeout(1500)` then scanned once — a coin flip on which side of that race it landed,
+ * meaning it could silently report stock for Mumbai's availability instead of the tracked pincode's,
+ * with no signal that anything had gone wrong. Fixed by polling for the tracked pincode's digits to
+ * actually appear in the page text (confirming the set took effect) and reading the stock markers
+ * from that SAME text snapshot — no separate delay/re-fetch between "pincode confirmed" and "scan
+ * stock" that could itself cross the revert boundary. If the pincode is never confirmed showing
+ * within the poll window, returns `error` (not a guess) rather than trusting whatever's on screen.
  */
 const { scanBodyForStockMarkers, looksBlocked } = require('../utils/pageHelpers');
+
+const PINCODE_CONFIRM_TIMEOUT_MS = 2500;
+const PINCODE_CONFIRM_POLL_MS = 150;
 
 async function check(page, url, pincode) {
   let response;
@@ -49,15 +66,50 @@ async function check(page, url, pincode) {
     await pincodeInput.fill('');
     await pincodeInput.fill(pincode);
     await page.getByText('Continue', { exact: true }).click({ timeout: 5000 });
-    await page.waitForTimeout(1500);
   } catch (err) {
-    // pincode widget not found/interactable (layout changed) — fall through and read whatever
-    // stock state is showing regardless (may reflect Croma's geo-IP-defaulted pincode, not the
-    // tracked one).
+    // pincode widget not found/interactable (layout changed) — fall through to the confirmation
+    // poll below, which will correctly report `error` since the pincode never gets confirmed.
   }
 
-  const result = await scanBodyForStockMarkers(page);
-  return { status: result.status, http_status: httpStatus, raw: result.raw, error: result.error };
+  // Poll for the pincode to actually be showing, then scan stock markers from that SAME text read —
+  // no gap between "confirmed set" and "read stock" for Croma's own revert race to land in.
+  const deadline = Date.now() + PINCODE_CONFIRM_TIMEOUT_MS;
+  let confirmedText = null;
+  while (Date.now() < deadline) {
+    const text = await page.locator('body').innerText().catch(() => '');
+    if (text.includes(pincode)) {
+      confirmedText = text;
+      break;
+    }
+    await page.waitForTimeout(PINCODE_CONFIRM_POLL_MS);
+  }
+
+  if (!confirmedText) {
+    return {
+      status: 'error',
+      http_status: httpStatus,
+      raw: '',
+      error: `Pincode ${pincode} never confirmed showing on page — Croma's location widget likely reverted to an IP-geolocation default before the stock check could run`,
+    };
+  }
+
+  const lower = confirmedText.toLowerCase();
+  if (looksBlocked(confirmedText)) {
+    return { status: 'blocked', http_status: httpStatus, raw: confirmedText.slice(0, 2000), error: null };
+  }
+  if (lower.includes('sold out') || lower.includes('out of stock') || lower.includes('notify me')) {
+    return { status: 'out_of_stock', http_status: httpStatus, raw: confirmedText.slice(0, 500), error: null };
+  }
+  if (lower.includes('add to cart') || lower.includes('buy now')) {
+    return { status: 'in_stock', http_status: httpStatus, raw: confirmedText.slice(0, 500), error: null };
+  }
+
+  return {
+    status: 'error',
+    http_status: httpStatus,
+    raw: confirmedText.slice(0, 500),
+    error: 'Could not find a known stock marker — page structure may have changed or needs a site-specific selector',
+  };
 }
 
 module.exports = { check };
