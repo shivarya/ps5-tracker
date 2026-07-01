@@ -12,13 +12,22 @@
  *   4. Clicking a suggestion goes to a "Set Delivery location"/"Select delivery address" map screen with
  *      a pin already placed at the right spot and a "Confirm" button (plain text, also a `css-xxxxx`
  *      div, no role="button") — click it to apply.
- *   5. Stock signal (verified against both an out-of-stock PS5 console and an in-stock PlayStation
- *      Portal): "Notify Me" text present = out_of_stock; "Buy now" or "ADD TO CART" text present =
- *      in_stock. This reflects general stock, not yet confirmed to change per-pincode for a genuinely
- *      undeliverable address — if that turns out to matter, look for "not deliverable"/"not serviceable"
- *      text after confirming the pincode.
+ *   5. Stock signal — checked in order:
+ *        a. "Notify Me" text present → out_of_stock (global OOS, most reliable signal).
+ *        b. Pincode-specific "not serviceable"/"not available"/"cannot be delivered" → out_of_stock
+ *           (item exists globally but doesn't ship to this pincode). FALSE POSITIVE BUG hit 2026-07-01:
+ *           Flipkart showed "Buy now" (global stock) but the pincode delivery section said the item
+ *           wasn't deliverable to 560067 — we reported in_stock incorrectly. Fix: scan for
+ *           pincode-specific unavailability text before accepting "Buy now" as in_stock.
+ *        c. "Buy now" or "ADD TO CART" and no delivery-unavailability text → in_stock.
+ *   NOTE: the pincode interaction is still wrapped in try/catch so a widget-layout change doesn't
+ *   crash the run — but if the pincode can't be confirmed in the page text afterward, we return
+ *   error rather than a possibly-wrong stock state (same pattern as croma.js).
  */
 const { looksBlocked } = require('../utils/pageHelpers');
+
+// Patterns Flipkart uses when an item exists but won't ship to the selected pincode.
+const NOT_SERVICEABLE_RE = /not (available|serviceable|deliverable)|delivery (not available|unavailable)|cannot be delivered|don't deliver|doesn't deliver|pincode.*not.*service|service.*not.*available/i;
 
 async function check(page, url, pincode) {
   let response;
@@ -35,6 +44,7 @@ async function check(page, url, pincode) {
     return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null };
   }
 
+  let pincodeConfirmed = false;
   try {
     await page.getByText('Select delivery location', { exact: true }).click({ timeout: 5000 });
     const pincodeInput = page.getByPlaceholder('Search by area, street name, pin code');
@@ -43,17 +53,38 @@ async function check(page, url, pincode) {
     await page.waitForTimeout(1500);
     await page.getByText(pincode, { exact: true }).first().click({ timeout: 5000 });
     await page.getByText('Confirm', { exact: true }).click({ timeout: 5000 });
-    await page.waitForTimeout(1500);
-  } catch (err) {
-    // Location widget not found/interactable (layout changed, or address already saved from a prior
-    // run reusing a profile) — fall through and read whatever stock state is showing regardless.
+    // Poll until the pincode appears in page text (confirm the widget actually applied it).
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline) {
+      const t = await page.locator('body').innerText().catch(() => '');
+      if (t.includes(pincode)) { pincodeConfirmed = true; break; }
+      await page.waitForTimeout(300);
+    }
+  } catch (_) {
+    // Location widget not found/interactable — pincodeConfirmed stays false.
   }
 
   const bodyText = await page.locator('body').innerText().catch(() => '');
+
   if (/notify me/i.test(bodyText)) {
     return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null };
   }
+
+  if (NOT_SERVICEABLE_RE.test(bodyText)) {
+    return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null };
+  }
+
   if (/buy now|add to cart/i.test(bodyText)) {
+    if (!pincodeConfirmed) {
+      // "Buy now" present but we couldn't verify the pincode was applied — could be global stock
+      // for a different delivery location. Return error rather than a false positive.
+      return {
+        status: 'error',
+        http_status: httpStatus,
+        raw: bodyText.slice(0, 500),
+        error: `"Buy now" found but pincode ${pincode} was not confirmed in page text — possible global stock for wrong location`,
+      };
+    }
     return { status: 'in_stock', http_status: httpStatus, raw: '', error: null };
   }
 
