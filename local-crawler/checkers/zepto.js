@@ -19,11 +19,11 @@
  *   5. Stock signal — unambiguous from page text:
  *        "Add to Cart"               → in_stock
  *        "Notify Me when back in stock" / "Notify Me" → out_of_stock
- *      No pincode confirmation guard needed: the location picker sets the store before
- *      the page renders stock status, so the text is always pincode-specific.
  *
- * If the location picker is already set (cookie present from a prior run in the same
- * Playwright context), step 2–4 are skipped and the page loads with the right location.
+ * IMPORTANT: Zepto IP-geolocates a fresh Playwright session to the machine's apparent
+ * location — possibly a different dark-store area than the tracked pincode. The location
+ * must be forced on every run, not just when "Select Location" is visible. Omitting
+ * this step causes silent false positives (in_stock for the wrong pincode).
  * Because index.js creates a fresh context per run, location must be set every time.
  *
  * pvid (product_variant_id) is the UUID in the product URL path after /pvid/ — it is
@@ -46,25 +46,32 @@ async function check(page, url, pincode) {
     return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null };
   }
 
-  // Set location if the picker is showing (no location cookie from this session).
-  const selectLocVisible = await page.getByText('Select Location', { exact: true }).isVisible({ timeout: 2000 }).catch(() => false);
-  if (selectLocVisible) {
-    try {
-      await page.getByText('Select Location', { exact: true }).click({ timeout: 5000 });
-      const searchInput = page.getByPlaceholder('Search a new address');
-      await searchInput.waitFor({ state: 'visible', timeout: 8000 });
-      // Playwright fill() properly triggers React's synthetic event handlers.
-      await searchInput.fill(pincode);
-      await page.waitForTimeout(2000); // wait for autocomplete suggestions
-      // Click first suggestion row that contains the pincode.
-      const suggestionRow = page.locator('li, [role="option"], [role="listitem"]').filter({ hasText: pincode });
-      await suggestionRow.first().click({ timeout: 8000 });
-      // Wait for the product page to reload with the new location applied.
-      await page.waitForTimeout(3000);
-    } catch (locErr) {
-      // Location picker failed — continue and check what the page shows anyway.
-      // If it still says "Select Location", the stock check will be inconclusive.
-    }
+  // Always force the location to the tracked pincode — Zepto uses IP-geolocation in a
+  // fresh session, which may place us in a different dark-store area than the tracked
+  // pincode. The location button is the same element whether a location is auto-set or
+  // not; after setting a location it shows the area name rather than "Select Location",
+  // but clicking it always re-opens the picker. Try the stable class prefix first,
+  // fall back to the "Select Location" text node (covers the no-auto-location case).
+  try {
+    const locBtn = page.locator('button.__4y7HY, [class*="__4y7HY"]').first();
+    const locBtnAlt = page.getByText('Select Location', { exact: true });
+    const btnToClick = await locBtn.isVisible({ timeout: 2000 }).catch(() => false) ? locBtn : locBtnAlt;
+    await btnToClick.click({ timeout: 5000 });
+
+    const searchInput = page.getByPlaceholder('Search a new address');
+    await searchInput.waitFor({ state: 'visible', timeout: 8000 });
+    // Playwright fill() properly triggers React's synthetic event handlers.
+    await searchInput.fill(pincode);
+    await page.waitForTimeout(2000); // wait for autocomplete suggestions
+
+    // Click first suggestion row that contains the pincode.
+    const suggestionRow = page.locator('li, [role="option"], [role="listitem"]').filter({ hasText: pincode });
+    await suggestionRow.first().click({ timeout: 8000 });
+
+    // Wait for the product page to reload with the new location applied.
+    await page.waitForTimeout(3000);
+  } catch (locErr) {
+    // Location picker interaction failed — the "Select Location" guard below catches this.
   }
 
   const bodyText = await page.locator('body').innerText().catch(() => '');
