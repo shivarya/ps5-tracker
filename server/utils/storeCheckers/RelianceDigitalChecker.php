@@ -3,25 +3,29 @@ require_once __DIR__ . '/StoreCheckerInterface.php';
 require_once __DIR__ . '/../httpClient.php';
 
 /**
- * reliancedigital.in runs on the Fynd/GoFynd commerce platform. Its storefront
- * exposes a public sizes/availability JSON endpoint that the PDP's own JS
- * calls — captured live via Chrome DevTools on a real PS5 listing (2026-06-28):
+ * reliancedigital.in runs on the Fynd/GoFynd commerce platform.
  *
- *   GET /api/service/application/catalog/v1.0/products/{slug}/sizes/
- *   Headers: authorization: Bearer <storefront-public-token>, x-location-detail: {"pincode":...}
+ * Root-cause fix 2026-07-02: the previous approach called the Fynd `sizes/` endpoint
+ * (`/api/service/application/catalog/v1.0/products/{slug}/sizes/`) with an
+ * `x-location-detail` pincode header — but that endpoint IGNORES the pincode entirely
+ * and returns global stock (confirmed by getting identical responses for 560067 Bangalore
+ * and 194101 Leh). This caused false `in_stock` alarms all day.
  *
- * Verified working with plain curl — no signature, no cookies, no session
- * required (the `x-fp-signature` header DevTools showed is NOT enforced on
- * this endpoint). Response shape:
- *   {"sellable": bool, "sizes": [{"quantity": int, "is_available": bool, ...}], ...}
+ * The real pincode-aware check is a two-step approach captured via Chrome DevTools on
+ * 2026-07-02 by triggering the "Delivery Related" pincode form on the product page:
  *
- * `sellable` + `sizes[].is_available` is the real stock signal. The
- * x-location-detail pincode did not change the result for the listing this
- * was captured against (it was nationally out of stock at capture time) —
- * if a future listing's stock turns out NOT to vary by pincode either, that's
- * consistent with Reliance Digital's storefront treating "stores.count" (pickup
- * availability) separately from delivery; re-verify this once a genuinely
- * in-stock listing is available to confirm pincode does affect `is_available`.
+ *   Step 1: GET /ext/raven-api/catalog/v1.0/products/{slug}
+ *     → extract item_code (article_id) from response.item_code
+ *
+ *   Step 2: POST /ext/raven-api/inventory/multi/articles-v2
+ *     Body: {"articles":[{"article_id":"{item_code}","quantity":0}],"phone_number":"0","pincode":"{pincode}","request_page":"pdp"}
+ *     → data.success === true means deliverable in-stock to that pincode
+ *     → data.success === false means OOS or not serviceable to pincode
+ *       (error.message: "Not available for your pincode" | article.error.message: "Out of Stock")
+ *
+ * Both endpoints accept the storefront bearer token and require NO x-fp-signature
+ * (the signature DevTools shows is computed by the page's Fynd SDK but is not
+ * enforced server-side on these endpoints — verified by calling both without it).
  *
  * The bearer token below is a storefront-wide public token embedded in every
  * page's client JS (not a per-session secret) — safe to hardcode, but if it
@@ -30,6 +34,8 @@ require_once __DIR__ . '/../httpClient.php';
 class RelianceDigitalChecker implements StoreCheckerInterface
 {
   private const STOREFRONT_TOKEN = 'NjQ1YTA1Nzg3NWQ4YzQ4ODJiMDk2ZjdlOl9fLU80NC00aQ==';
+  private const CATALOG_BASE = 'https://www.reliancedigital.in/ext/raven-api/catalog/v1.0/products/';
+  private const INVENTORY_URL = 'https://www.reliancedigital.in/ext/raven-api/inventory/multi/articles-v2';
 
   public static function check(string $url, string $pincode): array
   {
@@ -38,15 +44,6 @@ class RelianceDigitalChecker implements StoreCheckerInterface
       return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => 'Could not extract product slug from URL: ' . $url];
     }
 
-    $apiUrl = "https://www.reliancedigital.in/api/service/application/catalog/v1.0/products/{$slug}/sizes/";
-    $locationHeader = json_encode([
-      'country_iso_code' => 'IN',
-      'country' => 'INDIA',
-      'pincode' => $pincode,
-      'city' => '',
-      'state' => '',
-    ]);
-
     // Cookie jar is per-listing but not reused across separate check() calls — a stale
     // cross-poll session caused a real, hard-to-diagnose bug in SonyCenterChecker.php (an
     // accumulating abandoned-cart quantity), so every checker using this sys_get_temp_dir()
@@ -54,42 +51,65 @@ class RelianceDigitalChecker implements StoreCheckerInterface
     // minutes apart silently share state.
     $cookieJar = sys_get_temp_dir() . '/ps5_rd_' . md5($url) . '.cookies';
     try {
-      $res = HttpClient::get($apiUrl, $cookieJar, [
+      // Step 1: catalog call to get article_id (item_code)
+      $catalogRes = HttpClient::get(self::CATALOG_BASE . $slug, $cookieJar, [
         'Authorization: Bearer ' . self::STOREFRONT_TOKEN,
-        'x-location-detail: ' . $locationHeader,
         'x-currency-code: INR',
         'Accept: application/json, text/plain, */*',
       ], $url);
 
-      if (!$res['ok']) {
-        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => $res['error']];
+      if (!$catalogRes['ok']) {
+        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => 'Catalog fetch failed: ' . $catalogRes['error']];
       }
-      if (HttpClient::looksBlocked((int)$res['http_status'], $res['body'])) {
-        return ['status' => 'blocked', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => null];
+      if (HttpClient::looksBlocked((int)$catalogRes['http_status'], $catalogRes['body'])) {
+        return ['status' => 'blocked', 'http_status' => $catalogRes['http_status'], 'raw' => substr($catalogRes['body'], 0, 2000), 'error' => null];
       }
-      if ($res['http_status'] !== 200) {
-        return ['status' => 'error', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => 'Unexpected HTTP status'];
+      if ($catalogRes['http_status'] !== 200) {
+        return ['status' => 'error', 'http_status' => $catalogRes['http_status'], 'raw' => substr($catalogRes['body'], 0, 500), 'error' => 'Catalog HTTP ' . $catalogRes['http_status']];
+      }
+      $catalog = json_decode($catalogRes['body'], true);
+      $articleId = $catalog['item_code'] ?? null;
+      if (!$articleId) {
+        return ['status' => 'error', 'http_status' => 200, 'raw' => substr($catalogRes['body'], 0, 500), 'error' => 'article_id (item_code) missing from catalog response — endpoint may have changed'];
       }
 
-      $decoded = json_decode($res['body'], true);
-      if (!is_array($decoded) || !isset($decoded['sellable'])) {
-        return ['status' => 'error', 'http_status' => 200, 'raw' => substr($res['body'], 0, 500), 'error' => 'Unexpected response shape — endpoint may have changed'];
+      // Step 2: pincode-aware inventory check
+      $inventoryBody = json_encode([
+        'articles' => [['article_id' => $articleId, 'quantity' => 0]],
+        'phone_number' => '0',
+        'pincode' => $pincode,
+        'request_page' => 'pdp',
+      ]);
+      $invRes = HttpClient::post(self::INVENTORY_URL, $cookieJar, [
+        'Authorization: Bearer ' . self::STOREFRONT_TOKEN,
+        'Content-Type: application/json',
+        'Accept: application/json, text/plain, */*',
+      ], $url, $inventoryBody);
+
+      if (!$invRes['ok']) {
+        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => 'Inventory fetch failed: ' . $invRes['error']];
+      }
+      if (HttpClient::looksBlocked((int)$invRes['http_status'], $invRes['body'])) {
+        return ['status' => 'blocked', 'http_status' => $invRes['http_status'], 'raw' => substr($invRes['body'], 0, 2000), 'error' => null];
+      }
+      if ($invRes['http_status'] !== 200) {
+        return ['status' => 'error', 'http_status' => $invRes['http_status'], 'raw' => substr($invRes['body'], 0, 500), 'error' => 'Inventory HTTP ' . $invRes['http_status']];
       }
 
-      $sizes = $decoded['sizes'] ?? [];
-      $anyAvailable = false;
-      foreach ($sizes as $size) {
-        if (!empty($size['is_available']) && (int)($size['quantity'] ?? 0) > 0) {
-          $anyAvailable = true;
-          break;
-        }
+      $inv = json_decode($invRes['body'], true);
+      $data = $inv['data'] ?? null;
+      if (!is_array($data) || !array_key_exists('success', $data)) {
+        return ['status' => 'error', 'http_status' => 200, 'raw' => substr($invRes['body'], 0, 500), 'error' => 'Unexpected inventory response shape — endpoint may have changed'];
       }
-      $inStock = !empty($decoded['sellable']) && $anyAvailable;
 
+      // data.success === true: item is in stock AND deliverable to the pincode.
+      // data.success === false: either globally OOS or not serviceable to this pincode.
+      // Both map to out_of_stock from the user's perspective.
+      $inStock = !empty($data['success']);
       return [
         'status' => $inStock ? 'in_stock' : 'out_of_stock',
         'http_status' => 200,
-        'raw' => substr($res['body'], 0, 500),
+        'raw' => substr($invRes['body'], 0, 500),
         'error' => null,
       ];
     } finally {
