@@ -17,6 +17,7 @@ const CHECKERS = {
   blinkit: require('./checkers/blinkit'),
   instamart: require('./checkers/instamartMcp'), // official Swiggy MCP API, not browser automation — see its docblock
   zepto: require('./checkers/zepto'),
+  md_computers: require('./checkers/mdComputers'),
 };
 
 const LOCAL_STORES = Object.keys(CHECKERS);
