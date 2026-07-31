@@ -17,6 +17,11 @@ require_once __DIR__ . '/../httpClient.php';
  *
  * `vanNo` is the numeric SKU that appears in the product URL itself
  * (.../p/{sku}/slug-text), so no separate lookup is needed.
+ *
+ * Price (added 2026-07-29): the servicability microservice returns stock only, no price —
+ * confirmed live against SKU 259648. The PDP HTML does carry it server-rendered though
+ * (`data-compare-price="69990"`), so price comes from a second, best-effort GET of the product
+ * page; a failure there just yields a null price and never affects the stock verdict.
  */
 class VijaySalesChecker implements StoreCheckerInterface
 {
@@ -40,19 +45,19 @@ class VijaySalesChecker implements StoreCheckerInterface
       ], 'https://www.vijaysales.com/');
 
       if (!$res['ok']) {
-        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => $res['error']];
+        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => $res['error'], 'price' => null];
       }
       if (HttpClient::looksBlocked((int)$res['http_status'], $res['body'])) {
-        return ['status' => 'blocked', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => null];
+        return ['status' => 'blocked', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => null, 'price' => null];
       }
       if ($res['http_status'] !== 200) {
-        return ['status' => 'error', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => 'Unexpected HTTP status'];
+        return ['status' => 'error', 'http_status' => $res['http_status'], 'raw' => substr($res['body'], 0, 2000), 'error' => 'Unexpected HTTP status', 'price' => null];
       }
 
       $decoded = json_decode($res['body'], true);
       $entry = $decoded['data'][$sku] ?? null;
       if (!is_array($entry)) {
-        return ['status' => 'error', 'http_status' => 200, 'raw' => substr($res['body'], 0, 500), 'error' => 'Unexpected response shape — endpoint may have changed'];
+        return ['status' => 'error', 'http_status' => 200, 'raw' => substr($res['body'], 0, 500), 'error' => 'Unexpected response shape — endpoint may have changed', 'price' => null];
       }
 
       $inStock = !empty($entry['isServiceable']) && (int)($entry['maxQuantity'] ?? 0) > 0;
@@ -62,10 +67,31 @@ class VijaySalesChecker implements StoreCheckerInterface
         'http_status' => 200,
         'raw' => substr($res['body'], 0, 500),
         'error' => null,
+        'price' => self::fetchPrice($url, $cookieJar),
       ];
     } finally {
       @unlink($cookieJar);
     }
+  }
+
+  /**
+   * Best-effort price read from the PDP HTML. `data-compare-price` is the cleanest anchor
+   * (a bare integer, no currency/thousands formatting); the visible `₹69990` text is the
+   * fallback. Returns null rather than throwing — price is never allowed to fail a check.
+   */
+  private static function fetchPrice(string $url, string $cookieJar): ?float
+  {
+    $res = HttpClient::get($url, $cookieJar, ['Accept: text/html'], 'https://www.vijaysales.com/');
+    if (!$res['ok'] || $res['http_status'] !== 200) {
+      return null;
+    }
+    if (preg_match('/data-compare-price="(\d+(?:\.\d+)?)"/', $res['body'], $m)) {
+      return (float)$m[1];
+    }
+    if (preg_match('/₹\s?([0-9][0-9,]{3,})/u', $res['body'], $m)) {
+      return (float)str_replace(',', '', $m[1]);
+    }
+    return null;
   }
 
   /** Extracts the numeric SKU from a vijaysales.com /p/{sku}/{slug} URL. */

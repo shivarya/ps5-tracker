@@ -88,7 +88,8 @@ async function main() {
         await page.close();
       }
 
-      console.log(`[local-crawler] listing ${listing.id} (${listing.store}): ${result.status}`);
+      const priceText = result.price != null ? ` @ ₹${result.price}` : '';
+      console.log(`[local-crawler] listing ${listing.id} (${listing.store}): ${result.status}${priceText}`);
       results.push({ listing_id: listing.id, ...result });
       checked.push({
         listing_id: listing.id,
@@ -97,6 +98,7 @@ async function main() {
         url: listing.url,
         status: result.status,
         http_status: result.http_status,
+        price: result.price ?? null,
         error: result.error,
       });
       await jitter();
@@ -108,17 +110,32 @@ async function main() {
   const { data: reportData } = await api.post('/stock/report', { results });
   const transitions = reportData?.data?.transitions || [];
 
+  // The server owns the notify decision (stock AND price under the listing's cap) and reports it
+  // back per transition. A price-suppressed transition must stay silent here too, otherwise the
+  // Windows toast would fire for exactly the 70k listings the price gate exists to mute.
   for (const t of transitions) {
-    console.log(`[local-crawler] transition: listing ${t.listing_id} (${t.store}) -> in_stock`);
+    const priceText = t.price != null ? ` @ ₹${t.price}` : ' (price unknown)';
+    // `notified === false` only — an API that predates the price gate omits the field entirely,
+    // and a missing flag must keep the old "toast every transition" behaviour rather than
+    // silently muting the desktop notification until the backend is redeployed.
+    if (t.notified === false) {
+      console.log(`[local-crawler] transition: listing ${t.listing_id} (${t.store}) -> in_stock${priceText} — push suppressed by price gate, no toast`);
+      continue;
+    }
+    console.log(`[local-crawler] transition: listing ${t.listing_id} (${t.store}) -> in_stock${priceText}`);
     notifyStockIn({
       productName: t.product_name,
       store: t.store,
       pincode: t.pincode,
       url: t.url,
+      price: t.price,
     });
   }
 
-  console.log(`[local-crawler] reported ${results.length} result(s), ${transitions.length} transition(s)`);
+  const notifiedCount = transitions.filter((t) => t.notified !== false).length;
+  console.log(
+    `[local-crawler] reported ${results.length} result(s), ${transitions.length} transition(s), ${notifiedCount} notified`
+  );
 
   appendRun({ startedAt, finishedAt: new Date().toISOString(), checked, transitions, error: null });
 }

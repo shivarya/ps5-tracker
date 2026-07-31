@@ -7,6 +7,10 @@ CREATE TABLE IF NOT EXISTS tracked_listings (
   url VARCHAR(1000) NOT NULL,
   product_name VARCHAR(255) NULL,
   pincode VARCHAR(10) NOT NULL DEFAULT '560067',
+  -- Last price a checker managed to read (NULL = unknown for this store/run).
+  last_price DECIMAL(10,2) NULL,
+  -- Per-listing notify cap; NULL falls back to the global NOTIFY_MAX_PRICE in .env.
+  max_notify_price DECIMAL(10,2) NULL,
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   last_status ENUM('unknown','in_stock','out_of_stock','blocked','error') NOT NULL DEFAULT 'unknown',
   last_checked_at DATETIME NULL,
@@ -33,6 +37,7 @@ CREATE TABLE IF NOT EXISTS stock_check_log (
   checked_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   result ENUM('in_stock','out_of_stock','blocked','error') NOT NULL,
   http_status INT NULL,
+  price DECIMAL(10,2) NULL,
   response_snippet TEXT NULL,
   notified TINYINT(1) NOT NULL DEFAULT 0,
   error_message VARCHAR(500) NULL,

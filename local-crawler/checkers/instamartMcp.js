@@ -130,13 +130,21 @@ async function check(_page, url, pincode, productName) {
       return queryTokens.every((t) => name.includes(t));
     }) || products[0];
 
-    const available = matched.inStock === true || (matched.variations || []).some((v) => v.isInStockAndAvailable === true);
+    const variations = matched.variations || [];
+    const available = matched.inStock === true || variations.some((v) => v.isInStockAndAvailable === true);
+    // Prefer the price of a variation that's actually buyable; fall back to the cheapest listed.
+    const prices = variations
+      .filter((v) => (available ? v.isInStockAndAvailable === true : true))
+      .map((v) => Number(v.price))
+      .filter((p) => Number.isFinite(p) && p > 0);
+    const price = prices.length ? Math.min(...prices) : null;
 
     return {
       status: available ? 'in_stock' : 'out_of_stock',
       http_status: 200,
       raw: JSON.stringify(matched).slice(0, 1000),
       error: null,
+      price,
     };
   } catch (err) {
     return { status: 'error', http_status: null, raw: '', error: err.message };

@@ -57,24 +57,30 @@ class SonyCenterChecker implements StoreCheckerInterface
     try {
       $jsonRes = HttpClient::get($jsonUrl, $cookieJar, ['Accept: application/json'], $url);
       if (!$jsonRes['ok']) {
-        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => $jsonRes['error']];
+        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => $jsonRes['error'], 'price' => null];
       }
       if (HttpClient::looksBlocked((int)$jsonRes['http_status'], $jsonRes['body'])) {
-        return ['status' => 'blocked', 'http_status' => $jsonRes['http_status'], 'raw' => substr($jsonRes['body'], 0, 2000), 'error' => null];
+        return ['status' => 'blocked', 'http_status' => $jsonRes['http_status'], 'raw' => substr($jsonRes['body'], 0, 2000), 'error' => null, 'price' => null];
+      }
+      if ($jsonRes['http_status'] === 404) {
+        return ['status' => 'error', 'http_status' => 404, 'raw' => substr($jsonRes['body'], 0, 500), 'error' => 'Product not found (404) — the handle was probably relisted under a new one', 'price' => null];
       }
       if ($jsonRes['http_status'] !== 200) {
-        return ['status' => 'error', 'http_status' => $jsonRes['http_status'], 'raw' => substr($jsonRes['body'], 0, 2000), 'error' => 'Unexpected HTTP status fetching product JSON'];
+        return ['status' => 'error', 'http_status' => $jsonRes['http_status'], 'raw' => substr($jsonRes['body'], 0, 2000), 'error' => 'Unexpected HTTP status fetching product JSON', 'price' => null];
       }
 
       $decoded = json_decode($jsonRes['body'], true);
       $variants = $decoded['product']['variants'] ?? null;
       if (!is_array($variants) || empty($variants)) {
-        return ['status' => 'error', 'http_status' => 200, 'raw' => substr($jsonRes['body'], 0, 500), 'error' => 'No variants found — endpoint may have changed'];
+        return ['status' => 'error', 'http_status' => 200, 'raw' => substr($jsonRes['body'], 0, 500), 'error' => 'No variants found — endpoint may have changed', 'price' => null];
       }
       $variantId = $variants[0]['id'] ?? null;
       if ($variantId === null) {
-        return ['status' => 'error', 'http_status' => 200, 'raw' => '', 'error' => 'Could not find a variant id'];
+        return ['status' => 'error', 'http_status' => 200, 'raw' => '', 'error' => 'Could not find a variant id', 'price' => null];
       }
+      // Shopify gives the price as a decimal string on the same variant ("69990.00") — free,
+      // no extra request, unlike the theme-stripped `available` flag this file works around.
+      $price = isset($variants[0]['price']) && is_numeric($variants[0]['price']) ? (float)$variants[0]['price'] : null;
 
       $cartRes = HttpClient::post(
         'https://shopatsc.com/cart/add.js',
@@ -84,20 +90,20 @@ class SonyCenterChecker implements StoreCheckerInterface
         json_encode(['items' => [['id' => $variantId, 'quantity' => 1]]])
       );
       if (!$cartRes['ok']) {
-        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => $cartRes['error']];
+        return ['status' => 'error', 'http_status' => null, 'raw' => '', 'error' => $cartRes['error'], 'price' => $price];
       }
       if (HttpClient::looksBlocked((int)$cartRes['http_status'], $cartRes['body'])) {
-        return ['status' => 'blocked', 'http_status' => $cartRes['http_status'], 'raw' => substr($cartRes['body'], 0, 2000), 'error' => null];
+        return ['status' => 'blocked', 'http_status' => $cartRes['http_status'], 'raw' => substr($cartRes['body'], 0, 2000), 'error' => null, 'price' => $price];
       }
 
       if ($cartRes['http_status'] === 200) {
-        return ['status' => 'in_stock', 'http_status' => 200, 'raw' => substr($cartRes['body'], 0, 500), 'error' => null];
+        return ['status' => 'in_stock', 'http_status' => 200, 'raw' => substr($cartRes['body'], 0, 500), 'error' => null, 'price' => $price];
       }
       if ($cartRes['http_status'] === 422 && stripos($cartRes['body'], 'sold out') !== false) {
-        return ['status' => 'out_of_stock', 'http_status' => 422, 'raw' => substr($cartRes['body'], 0, 500), 'error' => null];
+        return ['status' => 'out_of_stock', 'http_status' => 422, 'raw' => substr($cartRes['body'], 0, 500), 'error' => null, 'price' => $price];
       }
 
-      return ['status' => 'error', 'http_status' => $cartRes['http_status'], 'raw' => substr($cartRes['body'], 0, 500), 'error' => 'Unexpected cart/add.js response — endpoint may have changed'];
+      return ['status' => 'error', 'http_status' => $cartRes['http_status'], 'raw' => substr($cartRes['body'], 0, 500), 'error' => 'Unexpected cart/add.js response — endpoint may have changed', 'price' => $price];
     } finally {
       @unlink($cookieJar);
     }

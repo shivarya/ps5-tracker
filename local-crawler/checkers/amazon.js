@@ -22,20 +22,36 @@
  * repeatedly, that's this failure mode.
  */
 const { scanBodyForStockMarkers, looksBlocked } = require('../utils/pageHelpers');
+const { parsePrice } = require('../utils/structuredData');
+
+/**
+ * Amazon has no ld+json Offer and its page text is full of unrelated prices (accessories,
+ * "customers also bought", EMI). The buy-box price is the first `.a-price .a-offscreen` inside
+ * the core price block — everything outside it is someone else's product. Returns null on an
+ * unavailable listing, which is normal: Amazon simply doesn't render a price then.
+ */
+async function readBuyBoxPrice(page) {
+  const text = await page
+    .locator('#corePrice_feature_div .a-price .a-offscreen, #corePriceDisplay_desktop_feature_div .a-price .a-offscreen')
+    .first()
+    .innerText({ timeout: 2000 })
+    .catch(() => null);
+  return parsePrice(text);
+}
 
 async function check(page, url, pincode) {
   let response;
   try {
     response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   } catch (err) {
-    return { status: 'error', http_status: null, raw: '', error: err.message };
+    return { status: 'error', http_status: null, raw: '', error: err.message, price: null };
   }
   const httpStatus = response ? response.status() : null;
   await page.waitForTimeout(1000);
 
   const bodyTextEarly = await page.locator('body').innerText().catch(() => '');
   if (looksBlocked(bodyTextEarly)) {
-    return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null };
+    return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null, price: null };
   }
 
   try {
@@ -50,13 +66,15 @@ async function check(page, url, pincode) {
     // fall through and read whatever stock state is showing regardless.
   }
 
+  const price = await readBuyBoxPrice(page);
+
   const bodyText = await page.locator('body').innerText().catch(() => '');
-  if (/currently unavailable/i.test(bodyText)) {
-    return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null };
+  if (/currently unavailable|temporarily out of stock/i.test(bodyText)) {
+    return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null, price };
   }
 
   const result = await scanBodyForStockMarkers(page);
-  return { status: result.status, http_status: httpStatus, raw: result.raw, error: result.error };
+  return { status: result.status, http_status: httpStatus, raw: result.raw, error: result.error, price };
 }
 
 module.exports = { check };

@@ -25,6 +25,7 @@
  *   error rather than a possibly-wrong stock state (same pattern as croma.js).
  */
 const { looksBlocked } = require('../utils/pageHelpers');
+const { readProductData } = require('../utils/structuredData');
 
 // Patterns Flipkart uses when an item exists but won't ship to the selected pincode.
 const NOT_SERVICEABLE_RE = /not (available|serviceable|deliverable)|delivery (not available|unavailable)|cannot be delivered|don't deliver|doesn't deliver|pincode.*not.*service|service.*not.*available/i;
@@ -34,15 +35,19 @@ async function check(page, url, pincode) {
   try {
     response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   } catch (err) {
-    return { status: 'error', http_status: null, raw: '', error: err.message };
+    return { status: 'error', http_status: null, raw: '', error: err.message, price: null };
   }
   const httpStatus = response ? response.status() : null;
   await page.waitForTimeout(1000);
 
   const bodyTextEarly = await page.locator('body').innerText().catch(() => '');
   if (looksBlocked(bodyTextEarly)) {
-    return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null };
+    return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null, price: null };
   }
+
+  // Flipkart's ld+json Offer carries the price (verified 2026-07-29). Its `availability` is NOT
+  // used — it's global, and this checker's whole point is pincode-specific deliverability.
+  const { price } = await readProductData(page);
 
   let pincodeConfirmed = false;
   try {
@@ -67,11 +72,11 @@ async function check(page, url, pincode) {
   const bodyText = await page.locator('body').innerText().catch(() => '');
 
   if (/notify me/i.test(bodyText)) {
-    return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null };
+    return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null, price };
   }
 
   if (NOT_SERVICEABLE_RE.test(bodyText)) {
-    return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null };
+    return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null, price };
   }
 
   if (/buy now|add to cart/i.test(bodyText)) {
@@ -83,9 +88,10 @@ async function check(page, url, pincode) {
         http_status: httpStatus,
         raw: bodyText.slice(0, 500),
         error: `"Buy now" found but pincode ${pincode} was not confirmed in page text — possible global stock for wrong location`,
+        price,
       };
     }
-    return { status: 'in_stock', http_status: httpStatus, raw: '', error: null };
+    return { status: 'in_stock', http_status: httpStatus, raw: '', error: null, price };
   }
 
   return {
@@ -93,6 +99,7 @@ async function check(page, url, pincode) {
     http_status: httpStatus,
     raw: bodyText.slice(0, 500),
     error: 'Could not find a known stock marker ("Notify Me" / "Buy now" / "Add to cart") — page structure may have changed',
+    price,
   };
 }
 

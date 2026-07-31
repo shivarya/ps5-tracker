@@ -28,6 +28,10 @@ const axios = require('axios');
 const STOREFRONT_TOKEN = 'NjQ1YTA1Nzg3NWQ4YzQ4ODJiMDk2ZjdlOl9fLU80NC00aQ==';
 const CATALOG_BASE = 'https://www.reliancedigital.in/ext/raven-api/catalog/v1.0/products/';
 const INVENTORY_URL = 'https://www.reliancedigital.in/ext/raven-api/inventory/multi/articles-v2';
+// PRICE ONLY. This is the Fynd application-API endpoint whose STOCK fields ignore the pincode —
+// the exact trap the 2026-07-02 rewrite above got out of. It does carry price.effective, which
+// neither raven-api call returns. Never read availability from it.
+const SIZES_BASE = 'https://www.reliancedigital.in/api/service/application/catalog/v1.0/products/';
 
 const AUTH_HEADERS = {
   Authorization: `Bearer ${STOREFRONT_TOKEN}`,
@@ -95,7 +99,25 @@ async function check(_page, url, pincode) {
     http_status: 200,
     raw: JSON.stringify(invRes.data).slice(0, 500),
     error: null,
+    price: await fetchPrice(slug),
   };
+}
+
+/** Best-effort price from the sizes endpoint's price.effective. Null on any failure. */
+async function fetchPrice(slug) {
+  try {
+    const res = await axios.get(`${SIZES_BASE}${encodeURIComponent(slug)}/sizes/`, {
+      headers: { ...AUTH_HEADERS, 'x-currency-code': 'INR' },
+      validateStatus: () => true,
+      timeout: 15000,
+    });
+    if (res.status !== 200) return null;
+    const effective = res.data?.price?.effective;
+    const value = effective?.max ?? effective?.min ?? null;
+    return Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 module.exports = { check };

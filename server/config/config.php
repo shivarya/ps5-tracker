@@ -24,6 +24,11 @@ define('API_KEY', getenv('API_KEY') ?: '');
 
 define('DEFAULT_PINCODE', getenv('DEFAULT_PINCODE') ?: '560067');
 
+// Global price cap for push notifications: an in_stock transition above this price is logged but
+// NOT pushed. Per-listing tracked_listings.max_notify_price overrides it (set that for editions
+// that legitimately cost more, e.g. the PS5 Pro). 0/empty disables price gating entirely.
+define('NOTIFY_MAX_PRICE', (float)(getenv('NOTIFY_MAX_PRICE') ?: 60000));
+
 // Expo push
 define('EXPO_PUSH_URL', 'https://exp.host/--/api/v2/push/send');
 

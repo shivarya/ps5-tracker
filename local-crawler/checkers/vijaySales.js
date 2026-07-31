@@ -53,7 +53,33 @@ async function check(_page, url, pincode) {
     http_status: 200,
     raw: JSON.stringify(res.data).slice(0, 500),
     error: null,
+    price: await fetchPrice(url),
   };
+}
+
+/**
+ * The servicability microservice returns stock only (verified live against SKU 259648), so price
+ * comes from the PDP HTML, which carries it server-rendered as `data-compare-price="69990"`.
+ * Best-effort — a failure here yields a null price and never changes the stock verdict.
+ */
+async function fetchPrice(url) {
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        Accept: 'text/html',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36',
+      },
+      validateStatus: () => true,
+      timeout: 20000,
+    });
+    if (res.status !== 200 || typeof res.data !== 'string') return null;
+    const attr = res.data.match(/data-compare-price="(\d+(?:\.\d+)?)"/);
+    if (attr) return Number(attr[1]);
+    const rupee = res.data.match(/₹\s?([0-9][0-9,]{3,})/);
+    return rupee ? Number(rupee[1].replace(/,/g, '')) : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 module.exports = { check };

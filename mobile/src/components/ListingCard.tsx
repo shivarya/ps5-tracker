@@ -14,6 +14,8 @@ const STORE_LABELS: Record<StoreName, string> = {
   amazon: 'Amazon',
   blinkit: 'Blinkit',
   instamart: 'Instamart',
+  zepto: 'Zepto',
+  md_computers: 'MD Computers',
 };
 
 function polledByLabel(store: StoreName): string {
@@ -51,6 +53,13 @@ function statusLabel(status: Listing['last_status']) {
   }
 }
 
+function formatInr(value: string | number | null): string | null {
+  if (value === null || value === '') return null;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return '₹' + num.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+
 function relativeTime(iso: string | null): string {
   if (!iso) return 'never checked';
   const diffMs = Date.now() - new Date(iso.replace(' ', 'T')).getTime();
@@ -65,6 +74,11 @@ function relativeTime(iso: string | null): string {
 export default function ListingCard({ listing }: { listing: Listing }) {
   const { colors } = useTheme();
   const polledBy = polledByLabel(listing.store);
+  const price = formatInr(listing.last_price);
+  // A listing priced above its cap is tracked but won't push on restock — say so rather than
+  // letting it look like a live alert (the disc edition is ~₹69,990 at several stores now).
+  const cap = Number(listing.effective_max_notify_price ?? 0);
+  const mutedByPrice = price !== null && cap > 0 && Number(listing.last_price) > cap;
 
   return (
     <TouchableOpacity
@@ -86,6 +100,12 @@ export default function ListingCard({ listing }: { listing: Listing }) {
       <Text style={[styles.url, { color: colors.primary }]} numberOfLines={1}>
         {listing.url}
       </Text>
+      {price !== null && (
+        <Text style={[styles.price, { color: mutedByPrice ? colors.textSecondary : colors.text }]}>
+          {price}
+          {mutedByPrice ? `  ·  above ${formatInr(cap)} alert cap — no push` : ''}
+        </Text>
+      )}
       <Text style={[styles.meta, { color: colors.textSecondary }]}>
         Pincode {listing.pincode} · checked {relativeTime(listing.last_checked_at)} · {polledBy}
       </Text>
@@ -134,6 +154,11 @@ const styles = StyleSheet.create({
   url: {
     fontSize: 11,
     marginBottom: 6,
+  },
+  price: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 4,
   },
   meta: {
     fontSize: 12,

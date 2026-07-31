@@ -50,20 +50,23 @@ function handleStockReportRoutes(string $uri, string $method): void
             'http_status' => isset($r['http_status']) ? (int)$r['http_status'] : null,
             'raw' => $r['raw'] ?? '',
             'error' => $r['error'] ?? null,
+            'price' => $r['price'] ?? null,
         ];
 
         $outcome = processCheckResult($db, $listing, $result);
         $processed++;
 
         if ($outcome['transitioned']) {
-            $transitions[] = ['listing' => $listing, 'log_id' => $outcome['log_id']];
+            $transitions[] = ['listing' => $listing, 'log_id' => $outcome['log_id'], 'price' => $outcome['price']];
         }
     }
 
-    if (!empty($transitions)) {
-        notifyTransitions($db, $transitions);
-    }
+    $notified = !empty($transitions) ? notifyTransitions($db, $transitions) : [];
+    $notifiedLogIds = array_column($notified, 'log_id');
 
+    // Every transition is reported back, each flagged with whether it actually pushed — the crawler
+    // fires its Windows toast only for notified ones, so a price-suppressed transition stays silent
+    // on both channels while still being visible in the crawler's run log.
     Response::success([
         'processed' => $processed,
         'transitions' => array_map(fn($t) => [
@@ -72,6 +75,8 @@ function handleStockReportRoutes(string $uri, string $method): void
             'store' => $t['listing']['store'],
             'pincode' => $t['listing']['pincode'],
             'url' => $t['listing']['url'],
+            'price' => $t['price'],
+            'notified' => in_array($t['log_id'], $notifiedLogIds, true),
         ], $transitions),
     ], 'Stock report processed');
 }

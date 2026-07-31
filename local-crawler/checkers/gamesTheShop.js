@@ -11,13 +11,14 @@
  * (same markers as the generic fallback below, confirmed accurate for this store).
  */
 const { scanBodyForStockMarkers } = require('../utils/pageHelpers');
+const { firstRupeeAmount } = require('../utils/structuredData');
 
 async function check(page, url, pincode) {
   let response;
   try {
     response = await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
   } catch (err) {
-    return { status: 'error', http_status: null, raw: '', error: err.message };
+    return { status: 'error', http_status: null, raw: '', error: err.message, price: null };
   }
   const httpStatus = response ? response.status() : null;
   await page.waitForTimeout(1500); // allow client-side hydration to settle
@@ -33,7 +34,10 @@ async function check(page, url, pincode) {
   }
 
   const result = await scanBodyForStockMarkers(page);
-  return { status: result.status, http_status: httpStatus, raw: result.raw, error: result.error };
+  // No usable ld+json on this storefront (verified 2026-07-29 — empty block), so the price comes
+  // from the page text: "₹ 69,990" for the disc edition, "₹ 49,990" for digital.
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  return { status: result.status, http_status: httpStatus, raw: result.raw, error: result.error, price: firstRupeeAmount(bodyText) };
 }
 
 module.exports = { check };

@@ -26,23 +26,44 @@
  * available for direct verification), but the scoped-text fix is the correct signal either way.
  */
 const { looksBlocked } = require('../utils/pageHelpers');
+const { readProductData } = require('../utils/structuredData');
 
 // Section headings that mark the end of the main product content on Blinkit PDPs.
 const RELATED_SECTION_RE = /similar products|top \d+ products|you may also like|frequently bought/i;
+// Markers that mean the product card has finished rendering, either way.
+const STOCK_MARKER_RE = /out of stock|currently unavailable|sold out|\bADD\b|add to cart|buy now/;
+const PRODUCT_SECTION_TIMEOUT_MS = 5000;
+
+/**
+ * Returns the page text up to the related-products section, once it contains a definite stock
+ * marker — or the last read after the timeout, so callers still get something to report on.
+ */
+async function pollForProductSection(page) {
+  const deadline = Date.now() + PRODUCT_SECTION_TIMEOUT_MS;
+  let latest = '';
+  while (Date.now() < deadline) {
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    const relatedMatch = RELATED_SECTION_RE.exec(bodyText);
+    latest = relatedMatch ? bodyText.slice(0, relatedMatch.index) : bodyText;
+    if (STOCK_MARKER_RE.test(latest)) return latest;
+    await page.waitForTimeout(300);
+  }
+  return latest;
+}
 
 async function check(page, url, pincode) {
   let response;
   try {
     response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   } catch (err) {
-    return { status: 'error', http_status: null, raw: '', error: err.message };
+    return { status: 'error', http_status: null, raw: '', error: err.message, price: null };
   }
   const httpStatus = response ? response.status() : null;
   await page.waitForTimeout(1500);
 
   const bodyTextEarly = await page.locator('body').innerText().catch(() => '');
   if (looksBlocked(bodyTextEarly)) {
-    return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null };
+    return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null, price: null };
   }
 
   let pincodeConfirmed = bodyTextEarly.slice(0, 300).includes(pincode);
@@ -67,15 +88,20 @@ async function check(page, url, pincode) {
     }
   }
 
-  const bodyText = await page.locator('body').innerText().catch(() => '');
+  // Poll for a definite stock marker rather than reading the body once at a fixed time. Blinkit's
+  // product card hydrates late: sampling three fresh runs on 2026-07-29 gave out_of_stock,
+  // out_of_stock, and a spurious `error` ("no known stock marker") purely on timing. Same class of
+  // race as the MD Computers false-positive bug — here it degrades to a wasted error + backoff
+  // rather than a false alert, but it's just as fixable.
+  const productSection = await pollForProductSection(page);
 
-  // Scope checks to the product section only — text before the "Similar products" / related
-  // sections which contain ADD buttons for unrelated in-stock items.
-  const relatedMatch = RELATED_SECTION_RE.exec(bodyText);
-  const productSection = relatedMatch ? bodyText.slice(0, relatedMatch.index) : bodyText;
+  // Read the ld+json Offer only after the card has settled — reading it up front returned null
+  // on a third of runs. Its `availability` is ignored: it's the global view, while the
+  // location-scoped text below is the authority for whether this dark store can deliver.
+  const { price } = await readProductData(page);
 
   if (/out of stock|currently unavailable|sold out/i.test(productSection)) {
-    return { status: 'out_of_stock', http_status: httpStatus, raw: productSection.slice(0, 500), error: null };
+    return { status: 'out_of_stock', http_status: httpStatus, raw: productSection.slice(0, 500), error: null, price };
   }
 
   if (/\bADD\b/.test(productSection) || /add to cart|buy now/i.test(productSection)) {
@@ -85,9 +111,10 @@ async function check(page, url, pincode) {
         http_status: httpStatus,
         raw: productSection.slice(0, 500),
         error: `"ADD" found in product section but pincode ${pincode} was not confirmed in page header — possible wrong delivery location`,
+        price,
       };
     }
-    return { status: 'in_stock', http_status: httpStatus, raw: '', error: null };
+    return { status: 'in_stock', http_status: httpStatus, raw: '', error: null, price };
   }
 
   return {
@@ -95,6 +122,7 @@ async function check(page, url, pincode) {
     http_status: httpStatus,
     raw: productSection.slice(0, 500),
     error: 'Could not find a known stock marker in the product section — page structure may have changed',
+    price,
   };
 }
 

@@ -80,7 +80,7 @@ foreach ($listings as $listing) {
     echo "[stock-poller] listing {$listing['id']} ({$listing['store']}): {$result['status']}" . ($processed['transitioned'] ? ' <-- TRANSITION' : '') . "\n";
 
     if ($processed['transitioned']) {
-        $transitions[] = ['listing' => $listing, 'log_id' => $processed['log_id']];
+        $transitions[] = ['listing' => $listing, 'log_id' => $processed['log_id'], 'price' => $processed['price']];
     }
 }
 

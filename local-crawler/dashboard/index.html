@@ -57,6 +57,8 @@
         <option value="amazon">Amazon</option>
         <option value="blinkit">Blinkit</option>
         <option value="instamart">Instamart</option>
+        <option value="zepto">Zepto</option>
+        <option value="md_computers">MD Computers</option>
       </select>
     </label>
     <label>Edition
@@ -75,6 +77,9 @@
     <label>Pincode
       <input type="text" name="pincode" value="560067" pattern="[0-9]{6}" />
     </label>
+    <label>Max notify price (optional)
+      <input type="number" name="max_notify_price" placeholder="blank = global cap" min="0" step="1" />
+    </label>
     <button type="submit">Add listing</button>
   </form>
   <div id="add-listing-message"></div>
@@ -87,8 +92,8 @@
     <button class="filter-chip" data-edition="pro">Pro</button>
   </div>
   <table id="status-table">
-    <thead><tr><th>Store</th><th>Product</th><th>URL</th><th>Pincode</th><th>Polled by</th><th>Status</th><th>Last checked</th></tr></thead>
-    <tbody id="status-body"><tr><td colspan="7" class="empty">loading…</td></tr></tbody>
+    <thead><tr><th>Store</th><th>Product</th><th>URL</th><th>Pincode</th><th>Price</th><th>Polled by</th><th>Status</th><th>Last checked</th></tr></thead>
+    <tbody id="status-body"><tr><td colspan="8" class="empty">loading…</td></tr></tbody>
   </table>
 
   <h2>Recent crawler runs (click a row for detail)</h2>
@@ -98,7 +103,7 @@
   </table>
 
 <script>
-const LOCAL_STORES = ['croma', 'flipkart', 'games_the_shop', 'amazon', 'blinkit', 'instamart'];
+const LOCAL_STORES = ['croma', 'flipkart', 'games_the_shop', 'amazon', 'blinkit', 'instamart', 'zepto', 'md_computers'];
 // Server-cron stores that the local crawler also backs up when the server-side check is
 // blocked/error (index.js's BACKUP_CHECKERS) — not unconditional like LOCAL_STORES.
 const BACKUP_STORES = ['reliance_digital', 'vijay_sales', 'sony_center'];
@@ -131,6 +136,26 @@ function fmtTime(iso) {
   return new Date(iso).toLocaleString();
 }
 
+function fmtInr(value) {
+  if (value === null || value === undefined || value === '') return null;
+  return '₹' + Number(value).toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+
+/**
+ * Price cell doubles as the notify-gate indicator: a price above the listing's effective cap is
+ * dimmed and marked, because that listing going in_stock will be logged but NOT pushed.
+ */
+function priceCell(l) {
+  const price = fmtInr(l.last_price);
+  const cap = Number(l.effective_max_notify_price || 0);
+  if (!price) return '<span style="color:#777">—</span>';
+  const overCap = cap > 0 && Number(l.last_price) > cap;
+  const capNote = l.max_notify_price ? ` (cap ${fmtInr(l.max_notify_price)})` : '';
+  return overCap
+    ? `<span style="color:#777" title="Above the ${fmtInr(cap)} notify cap — no push on restock">${price} · muted</span>`
+    : `<span title="Notify cap ${fmtInr(cap)}${capNote}">${price}</span>`;
+}
+
 function listingRow(l) {
   return `
     <tr>
@@ -138,6 +163,7 @@ function listingRow(l) {
       <td>${esc(l.product_name || '—')}</td>
       <td><a href="${esc(l.url)}" target="_blank" rel="noopener" style="color:#7aa2e0; word-break: break-all;">${esc(l.url)}</a></td>
       <td>${esc(l.pincode)}</td>
+      <td>${priceCell(l)}</td>
       <td>${polledByLabel(l.store)}</td>
       <td>${badge(l.last_status)}</td>
       <td>${fmtTime(l.last_checked_at)}</td>
@@ -149,12 +175,12 @@ function renderStatusTable() {
   const body = document.getElementById('status-body');
   const data = lastStatusData;
   if (data.length === 0) {
-    body.innerHTML = '<tr><td colspan="7" class="empty">No listings tracked yet — use the form above.</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="empty">No listings tracked yet — use the form above.</td></tr>';
     return;
   }
   const visible = editionFilter === 'all' ? data : data.filter((l) => l.edition === editionFilter);
   if (visible.length === 0) {
-    body.innerHTML = `<tr><td colspan="7" class="empty">No ${EDITION_LABELS[editionFilter] || ''} listings tracked yet.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="empty">No ${EDITION_LABELS[editionFilter] || ''} listings tracked yet.</td></tr>`;
     return;
   }
   if (editionFilter !== 'all') {
@@ -167,7 +193,7 @@ function renderStatusTable() {
     .map((edition) => {
       const group = visible.filter((l) => l.edition === edition).sort((a, b) => a.store.localeCompare(b.store));
       if (group.length === 0) return '';
-      return `<tr class="section-header"><td colspan="7">${EDITION_LABELS[edition]}</td></tr>` + group.map(listingRow).join('');
+      return `<tr class="section-header"><td colspan="8">${EDITION_LABELS[edition]}</td></tr>` + group.map(listingRow).join('');
     })
     .join('');
 }
@@ -181,7 +207,7 @@ async function loadStatus() {
     lastStatusData = data;
     renderStatusTable();
   } catch (err) {
-    body.innerHTML = `<tr><td colspan="7" class="err">Failed to load: ${err.message}</td></tr>`;
+    body.innerHTML = `<tr><td colspan="8" class="err">Failed to load: ${err.message}</td></tr>`;
   }
 }
 
@@ -208,6 +234,7 @@ async function loadRuns() {
       const detailRows = (run.checked || []).map((c) => `
         <tr><td></td><td colspan="3">
           ${esc(c.store.replace(/_/g, ' '))} — ${esc(c.product_name || c.url)} → ${badge(c.status)}
+          ${c.price != null ? ` <span style="color:#999">${fmtInr(c.price)}</span>` : ''}
           ${c.error ? `<span class="err"> (${esc(c.error)})</span>` : ''}
         </td></tr>
       `).join('') || '<tr><td></td><td colspan="3" class="empty">No listings checked this run.</td></tr>';
@@ -242,6 +269,7 @@ document.getElementById('add-listing').addEventListener('submit', async (e) => {
     url: form.url.value.trim(),
     product_name: form.product_name.value.trim() || undefined,
     pincode: form.pincode.value.trim() || undefined,
+    max_notify_price: form.max_notify_price.value.trim() || undefined,
   };
 
   button.disabled = true;

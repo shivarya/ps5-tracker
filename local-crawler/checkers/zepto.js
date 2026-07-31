@@ -30,6 +30,28 @@
  *   If the pincode is not in LOCATION_COOKIES, the checker returns status='error'.
  */
 const { looksBlocked } = require('../utils/pageHelpers');
+const { readProductData } = require('../utils/structuredData');
+
+const STOCK_MARKER_RE = /notify me|add to cart|out of stock/i;
+const STOCK_MARKER_TIMEOUT_MS = 6000;
+// Zepto serves its 404 as HTTP 202 with a soft-404 body ("...has made an egg-sit"), so the status
+// code can't be trusted to spot a delisted product — match the copy instead. Hit live on
+// 2026-07-29: the tracked PS5 PDP worked at 10:15 and 404'd by 11:40, with Zepto's catalog left
+// holding only PS5 games and accessories. Worth distinguishing from a parse failure, since the
+// fix is "find a new URL", not "fix the checker".
+const NOT_FOUND_RE = /egg-sit|page you.{0,3}re looking for/i;
+
+/** Waits until the product card shows a definite stock marker; returns the last read on timeout. */
+async function pollForStockMarker(page) {
+  const deadline = Date.now() + STOCK_MARKER_TIMEOUT_MS;
+  let latest = '';
+  while (Date.now() < deadline) {
+    latest = await page.locator('body').innerText().catch(() => '');
+    if (STOCK_MARKER_RE.test(latest) || looksBlocked(latest) || NOT_FOUND_RE.test(latest)) return latest;
+    await page.waitForTimeout(300);
+  }
+  return latest;
+}
 
 // Captured from a Chrome DevTools session with each pincode set in the location picker.
 // Values are stored URL-encoded (as Zepto's React app sets them).
@@ -50,6 +72,7 @@ async function check(page, url, pincode) {
       http_status: null,
       raw: '',
       error: `No location cookies configured for pincode ${pincode}. Add an entry to LOCATION_COOKIES in zepto.js (see docblock above).`,
+      price: null,
     };
   }
 
@@ -66,16 +89,32 @@ async function check(page, url, pincode) {
   try {
     response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   } catch (err) {
-    return { status: 'error', http_status: null, raw: '', error: err.message };
+    return { status: 'error', http_status: null, raw: '', error: err.message, price: null };
   }
   const httpStatus = response ? response.status() : null;
-  await page.waitForTimeout(2000);
 
-  const bodyText = await page.locator('body').innerText().catch(() => '');
+  // Poll for a definite stock marker instead of reading the body once after a fixed 2s wait — the
+  // product card hydrates late and a single early read intermittently returned `error` (seen on a
+  // live prod run 2026-07-29). Same fix as blinkit.js and mdComputers.js.
+  const bodyText = await pollForStockMarker(page);
 
   if (looksBlocked(bodyText)) {
-    return { status: 'blocked', http_status: httpStatus, raw: bodyText.slice(0, 2000), error: null };
+    return { status: 'blocked', http_status: httpStatus, raw: bodyText.slice(0, 2000), error: null, price: null };
   }
+
+  if (NOT_FOUND_RE.test(bodyText)) {
+    return {
+      status: 'error',
+      http_status: httpStatus,
+      raw: bodyText.slice(0, 500),
+      error: 'Zepto product page not found (soft 404) — the product was delisted from the catalog; the listing needs a new URL',
+      price: null,
+    };
+  }
+
+  // Zepto exposes the selling price via <meta itemprop="price"> (₹49,499 at the time of writing —
+  // it discounts below MRP, so this is the number that matters for the notify cap).
+  const { price } = await readProductData(page);
 
   // NOTE: Zepto's header UI still shows "Select Location" even when the location cookies
   // are successfully injected — the header is driven by a separate UI state, not by the
@@ -84,11 +123,11 @@ async function check(page, url, pincode) {
   // "Select Location" in the body is NOT a reliable guard and must not block us here.
 
   if (/notify me/i.test(bodyText)) {
-    return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null };
+    return { status: 'out_of_stock', http_status: httpStatus, raw: bodyText.slice(0, 500), error: null, price };
   }
 
   if (/add to cart/i.test(bodyText)) {
-    return { status: 'in_stock', http_status: httpStatus, raw: '', error: null };
+    return { status: 'in_stock', http_status: httpStatus, raw: '', error: null, price };
   }
 
   return {
@@ -96,6 +135,7 @@ async function check(page, url, pincode) {
     http_status: httpStatus,
     raw: bodyText.slice(0, 500),
     error: 'Could not find a known stock marker ("Add to Cart" / "Notify Me") — page structure may have changed',
+    price,
   };
 }
 

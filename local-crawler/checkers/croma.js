@@ -51,24 +51,38 @@
  * generic Buy-Now/Sold-Out scan is kept only as a fallback for when the delivery section can't be
  * found at all (defensive — not the primary signal anymore).
  */
-const { scanBodyForStockMarkers, looksBlocked } = require('../utils/pageHelpers');
+const { looksBlocked } = require('../utils/pageHelpers');
+const { firstRupeeAmount } = require('../utils/structuredData');
 
 const PINCODE_CONFIRM_TIMEOUT_MS = 2500;
 const PINCODE_CONFIRM_POLL_MS = 150;
+const PRICE_POLL_TIMEOUT_MS = 2500;
+
+/** Waits for the MRP to render (it lags the pincode confirmation). Null if it never shows. */
+async function pollForPrice(page) {
+  const deadline = Date.now() + PRICE_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const text = await page.locator('body').innerText().catch(() => '');
+    const price = firstRupeeAmount(text);
+    if (price !== null) return price;
+    await page.waitForTimeout(200);
+  }
+  return null;
+}
 
 async function check(page, url, pincode) {
   let response;
   try {
     response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
   } catch (err) {
-    return { status: 'error', http_status: null, raw: '', error: err.message };
+    return { status: 'error', http_status: null, raw: '', error: err.message, price: null };
   }
   const httpStatus = response ? response.status() : null;
   await page.waitForTimeout(1000);
 
   const bodyTextEarly = await page.locator('body').innerText().catch(() => '');
   if (looksBlocked(bodyTextEarly)) {
-    return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null };
+    return { status: 'blocked', http_status: httpStatus, raw: bodyTextEarly.slice(0, 2000), error: null, price: null };
   }
 
   try {
@@ -105,13 +119,23 @@ async function check(page, url, pincode) {
       http_status: httpStatus,
       raw: '',
       error: `Pincode ${pincode} never confirmed showing on page — Croma's location widget likely reverted to an IP-geolocation default before the stock check could run`,
+      price: null,
     };
   }
 
   const lower = confirmedText.toLowerCase();
   if (looksBlocked(confirmedText)) {
-    return { status: 'blocked', http_status: httpStatus, raw: confirmedText.slice(0, 2000), error: null };
+    return { status: 'blocked', http_status: httpStatus, raw: confirmedText.slice(0, 2000), error: null, price: null };
   }
+
+  // Croma's ld+json carries no price (verified 2026-07-29 — the block is empty), so it has to come
+  // from page text. It must NOT be read from `confirmedText`: the pincode is confirmed ~150-300ms
+  // after the Continue click, and at that instant the MRP line hasn't rendered — only the EMI
+  // figure ("₹2,589/mo*") has, which the plausible-price floor correctly rejects, yielding null
+  // every time (observed live 2026-07-29). Unlike the stock verdict, price is not part of the
+  // pincode-revert race — the MRP doesn't change when Croma silently switches back to its
+  // geo-IP city — so it's safe to poll for it separately after the verdict snapshot is taken.
+  const price = await pollForPrice(page);
 
   // Primary signal: the pincode-specific "Delivery at: ..." section — Buy Now/Add to Cart text is
   // present regardless of deliverability, so it's checked only as a fallback below.
@@ -120,15 +144,15 @@ async function check(page, url, pincode) {
     const deliverySection = lower.slice(deliveryIdx, deliveryIdx + 200);
     if (deliverySection.includes(pincode)) {
       const status = deliverySection.includes('not available for your pincode') ? 'out_of_stock' : 'in_stock';
-      return { status, http_status: httpStatus, raw: confirmedText.slice(deliveryIdx, deliveryIdx + 200), error: null };
+      return { status, http_status: httpStatus, raw: confirmedText.slice(deliveryIdx, deliveryIdx + 200), error: null, price };
     }
   }
 
   if (lower.includes('sold out') || lower.includes('out of stock') || lower.includes('notify me')) {
-    return { status: 'out_of_stock', http_status: httpStatus, raw: confirmedText.slice(0, 500), error: null };
+    return { status: 'out_of_stock', http_status: httpStatus, raw: confirmedText.slice(0, 500), error: null, price };
   }
   if (lower.includes('add to cart') || lower.includes('buy now')) {
-    return { status: 'in_stock', http_status: httpStatus, raw: confirmedText.slice(0, 500), error: null };
+    return { status: 'in_stock', http_status: httpStatus, raw: confirmedText.slice(0, 500), error: null, price };
   }
 
   return {
@@ -136,6 +160,7 @@ async function check(page, url, pincode) {
     http_status: httpStatus,
     raw: confirmedText.slice(0, 500),
     error: 'Could not find a known stock marker — page structure may have changed or needs a site-specific selector',
+    price,
   };
 }
 

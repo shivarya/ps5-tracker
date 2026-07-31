@@ -15,9 +15,28 @@ cd "c:\Users\Ash\Documents\Projects\apps\ps5-tracker\server" ; php -S localhost:
 
 ## What this app does
 
-A personal, single-user 24/7 stock monitor: polls PS5 listings across several Indian retailers for deliverability to a specific pincode, and pushes an instant phone notification the moment one goes from out-of-stock to in-stock. No login/multi-user system — it's a personal tool, gated by a single shared `API_KEY` header on write endpoints.
+A personal, single-user 24/7 stock monitor: polls PS5 listings across several Indian retailers for deliverability to a specific pincode, and pushes an instant phone notification the moment one goes from out-of-stock to in-stock **at or below a price cap** (₹60,000 by default — see "Price-gated notifications" below). No login/multi-user system — it's a personal tool, gated by a single shared `API_KEY` header on write endpoints.
 
 **Live**: `https://shivarya.dev/ps5_tracker/` (cPanel). **Status**: Phase 1 complete — deployed, server polling every 30 min (lowered from 5 min), 3 listings tracked server-side. Phase 2: a local Playwright crawler (`local-crawler/`) runs on the user's Windows machine, covering retailers Akamai/PerimeterX-blocks on shared hosting (Croma, Flipkart, Games The Shop, Amazon) plus quick-commerce platforms (Blinkit, Instamart) that were never server-side checkers at all. It reports results to the same backend via `POST /stock/report`, so both push notifications (Expo) and a local Windows toast fire from one shared transition-detection path (`server/utils/stockResultProcessor.php`). A Windows Scheduled Task (`PS5TrackerLocalCrawler`) is registered on this machine — fires once at every logon, then every 30 min indefinitely. A second task (`PS5TrackerDevServer`) auto-starts `php -S 0.0.0.0:8000` at logon so the crawler (and an Android emulator via `10.0.2.2`) has a local API to report to (MySQL itself runs as an always-on Windows service, already `Automatic` startup; bound to `0.0.0.0` rather than `localhost` specifically so the emulator's host-loopback alias can reach it — `localhost`-only binding was a real bug that silently broke the mobile app's `/status` calls from an emulator). A third task (`PS5TrackerDashboard`) auto-starts the dashboard (`local-crawler/dashboard.js`, `http://localhost:5055`) at logon — shows current status for all tracked listings (any store, not just local-crawler ones) plus the crawler's run history, and has a form to add new tracked listings without a terminal. **Currently configured against the local dev API** (`local-crawler/.env`'s `API_URL=http://localhost:8000`) — switch it to the production URL/key once ready to track real listings unattended.
+
+## Price-gated notifications (added 2026-07-29)
+
+Stock alone stopped being a useful alert signal once the disc edition's price roughly split into two tiers. Live prices captured 2026-07-29 for the tracked listings:
+
+| Listing | Price | Alerts? |
+|---|---|---|
+| Reliance Digital disc, Croma disc, Flipkart disc, MD Computers disc | ₹54,990 | yes |
+| Croma digital, (Games The Shop digital) | ₹49,990 | yes |
+| Blinkit disc | ₹58,190 | yes |
+| **Games The Shop disc, Vijay Sales disc, Sony Center disc, Zepto disc** | **₹69,990** | **no — muted** |
+| Amazon Pro | ₹2L+ (unavailable, no price rendered) | no, unless given its own cap |
+
+Mechanics: every checker now returns `price` alongside `status`; `processCheckResult()` writes it to `stock_check_log.price` and `tracked_listings.last_price` (a null price never overwrites the last known good one). `notifyTransitions()` runs `evaluateNotifyGate()` first and pushes only if the price is at or under the listing's cap — `tracked_listings.max_notify_price` if set, else `.env`'s `NOTIFY_MAX_PRICE` (default 60000; `0` disables gating entirely). A suppressed transition is still logged and still updates `last_status`, it just doesn't push.
+
+- **Unknown price → still notifies**, flagged "price unknown — check before buying" in the body. Deliberate: these listings are out of stock ~100% of the time, so a rare unpriced alert beats missing a real restock. But if `last_price` is known and above the cap, that fallback suppresses it — a checker that temporarily can't parse a price doesn't un-mute a 70k listing.
+- **Per-listing caps exist for the PS5 Pro case** — it legitimately costs ~2x a Slim, so a flat 60k cap would mute it forever. `php scripts/add_listing.php --max-price=120000`, `PUT /listings/{id} {"max_notify_price": 120000}`, or the dashboard's "Max notify price" field.
+- `/status` returns `last_price`, `max_notify_price` and a server-resolved `effective_max_notify_price`; the mobile card and dashboard both grey out an over-cap price and say it won't push, so a muted listing never looks like a live alert.
+- `POST /stock/report` returns each transition with a `notified` flag, and the local crawler only fires its Windows toast when it's not `false` — otherwise the desktop toast would still fire for exactly the listings the gate exists to mute. (It checks `=== false` specifically so an API deployed before this change keeps the old toast-everything behaviour rather than going silent.)
 
 ## Claude Code skills (`.claude/skills/`, load when launched inside `ps5-tracker/`)
 
@@ -50,7 +69,7 @@ A personal, single-user 24/7 stock monitor: polls PS5 listings across several In
 | Blinkit | `local-crawler/checkers/blinkit.js` | **Verified working** for the out-of-stock case (the only state available on the test listing). Flow: click text matching `/Delivery in \d+ minutes/` → fill `input[placeholder="search delivery location"]` → click the first `div[class*="LocationListContainer"]` suggestion (Blinkit's styled-components classes have a stable readable prefix + unstable hash suffix — match the prefix via `[class*=...]`) — no separate confirm step needed. Stock signal: "Out of stock" text confirmed; in-stock "ADD" button text inferred from sibling product cards, not yet confirmed on a purchasable PS5 listing. |
 | Instamart | `local-crawler/checkers/instamartMcp.js` (active) / `instamart.js` (superseded) | **Verified working — via Swiggy's official Builders MCP API instead of browser automation**, not Playwright. Browser automation is confirmed blocked even headed (`swiggy.com/instamart` → "Request Blocked", reproduced twice) — but `mcp.swiggy.com/builders` is a sanctioned developer API with a `search_products` tool, found 2026-06-30. Requires real OAuth login (phone + OTP, one-time interactive — see `utils/swiggyAuth.js` and `npm run swiggy-login`). **Caveat: Swiggy MCP v1.0 has no refresh-token grant — the access token expires after 5 days and needs a fresh interactive login each time**, this cannot be automated. `instamart.js` (the original Playwright attempt) is kept as a record of the confirmed-blocked browser approach, no longer wired into `index.js`. |
 | Zepto | `local-crawler/checkers/zepto.js` | **Verified working (OOS case), added 2026-07-02.** Quick-commerce; stock tied to the nearest dark store. Location is set via **cookie injection, NOT the UI picker** — the div-based location button (no `role="button"`) accepts Playwright clicks without error but never fires the React handler; meanwhile a fresh session gets IP-geolocated to an arbitrary dark store, which caused false in_stock before the fix. `page.context().addCookies()` with `latitude`/`longitude`/`user_position`/`serviceability` (captured per-pincode from a real Chrome session — values for 560067 hardcoded in `LOCATION_COOKIES`; new pincodes need a one-time DevTools `document.cookie` capture) makes the backend serve pincode-correct stock. Gotcha: the header still shows "Select Location" even when cookies are honored — it is NOT a failure signal. Stock signal: "Notify Me" = `out_of_stock`, "Add to Cart" = `in_stock`. |
-| MD Computers | `local-crawler/checkers/mdComputers.js` | **Verified working (OOS case), added 2026-07-03.** Genuine Kolkata retailer, ships pan-India from a central warehouse — **no pincode interaction at all** (global stock = deliverable). Cloudflare blocks plain curl outright (local-crawler-only, same tier as Croma), but a real browser loads the PDP fine on a fresh context. **Gotcha found live: hitting a malformed route (e.g. `/search?q=...`) flags the whole session and then even the PDP is blocked — the flag is cookie/session-scoped, not IP-scoped**, so the fresh-context-per-run crawler pattern is naturally immune, but never navigate anywhere except the product URL. URL format `mdcomputers.in/product/{slug}` (old `.html` URLs 301 there). Stock signal: "Notify Me" = `out_of_stock` (verified), "Add to Cart"/"Buy Now" = `in_stock` (theme-standard, unverified on a live PS5 like blinkit). |
+| MD Computers | `local-crawler/checkers/mdComputers.js` | **Verified working, added 2026-07-03, false-positive bug fixed 2026-07-29.** Genuine Kolkata retailer, ships pan-India from a central warehouse — **no pincode interaction at all** (global stock = deliverable). Cloudflare blocks plain curl outright (local-crawler-only, same tier as Croma), but a real browser loads the PDP fine on a fresh context. **Gotcha found live: hitting a malformed route (e.g. `/search?q=...`) flags the whole session and then even the PDP is blocked — the flag is cookie/session-scoped, not IP-scoped**, so the fresh-context-per-run crawler pattern is naturally immune, but never navigate anywhere except the product URL. URL format `mdcomputers.in/product/{slug}` (old `.html` URLs 301 there). **FALSE-ALERT BUG (2026-07-29): this one listing produced 38 of the 40 push notifications in the last 500 crawler runs**, flipping out_of_stock→in_stock→out_of_stock inside a single 30-min cycle. Reproduced by sampling the PDP at t+1s/t+3s/t+7s across fresh contexts: at t+1s, 2 of 3 runs showed `notifyMe=false, addToCart=true` — the real buy box's "Notify Me!" button (`#button-nwa-duplicate`, injected by a notify-when-available plugin) renders LATE while the WooCommerce related-products carousel (`.add_to_cart_button.add-to-cart-loop`) renders EARLY, so the old fixed `waitForTimeout(3000)` + whole-body `innerText` scan read the carousel's buttons as the product's own state. Fixed by reading `offers.availability` from the server-rendered schema.org JSON-LD instead (identical `OutOfStock` in all 9 samples, including the two that fooled the text scan) — which also supplies the price. 4/4 clean runs post-fix. The text fallback is now scoped to the product summary element and returns `error` rather than guessing. **This is the only store where JSON-LD availability may drive the stock verdict** (global stock == deliverable here); everywhere else it's a price source only. |
 
 ## Project Layout
 
@@ -64,6 +83,34 @@ Production API target: `https://shivarya.dev/ps5_tracker/` (cPanel, top-level su
 
 ---
 
+## The recurring bug shape here: reading a client-rendered page once, at a fixed time
+
+Four of these checkers have now had the same defect, and it's worth recognising on sight. Every one of these storefronts renders its buy box with client-side JS, so `await page.waitForTimeout(N)` followed by a single `body.innerText()` read is a coin flip against hydration. When it lands early you don't get an error — you get a *confident wrong answer*, because the page at that instant genuinely contains some other element's "Add to Cart".
+
+- **MD Computers (2026-07-29)** — read the related-products carousel's buttons as the product's own state → false `in_stock` → 38 spurious push notifications. Fixed via server-rendered JSON-LD.
+- **Blinkit (2026-07-29)** — spurious `error` on ~1 in 3 fresh runs, and intermittently null prices. Fixed by polling for a definite marker.
+- **Zepto (2026-07-29)** — same, fixed the same way.
+- **Croma (2026-06-30 / 07-01)** — three separate versions of this, documented at length in `croma.js`.
+
+The fix is always one of: prefer server-rendered structured data (`utils/structuredData.js`), or poll until a *definite* marker appears rather than waiting a fixed time, and return `error` instead of guessing when neither shows up. Never widen a text scan to the whole body to "make it work" — that's what caused the false alerts.
+
+## Listing URL audit (2026-07-29)
+
+Retailers reissue PS5 SKUs under new URLs when the price changes, and the old URL just dies — so a listing showing `error` for days is as likely to be a dead URL as a broken checker. All 16 tracked URLs were opened in a real browser on 2026-07-29:
+
+| Listing | Verdict |
+|---|---|
+| `vijay_sales` disc `/p/252606/...` | **Dead** — 302s to `/c/gaming` (the category page). Replaced with `/p/259648/sony-playstationr5-sa-e-disc-edition-gaming-console-ps5r-slim` (₹69,990), the relisted SKU. |
+| `sony_center` disc `/products/playstation-5-standard-edition` | **404**. Replaced with `/products/ps5-standard-e-chassis-arv` (₹69,990, published 2026-07-27). |
+| `sony_center` digital `/products/playstation-5-digital-edition` | **404, no replacement exists** — `products.json` (440 products, paginated) has exactly one PS5 console left, the Standard/disc above. Sony Center has delisted the Digital Edition console. Listing deleted. |
+| `instamart` | URL fine, but the Swiggy MCP token expired 2026-07-04 and re-login is manual + interactive every ~5 days. Deactivated. |
+| `zepto` disc | **Died mid-session** — worked at 10:15 (out_of_stock, ₹69,990), soft-404'd by 11:40 the same day, with and without the location cookies. Zepto's catalog now has only PS5 *games* and accessories, no console. Left active (quick-commerce catalogs churn, so it may return); `zepto.js` now reports it as an explicit "delisted, needs a new URL" error rather than an ambiguous parse failure. |
+| Everything else (reliance, croma ×2, games_the_shop ×2, flipkart, amazon ×3, blinkit ×2, md_computers) | Valid. Croma's disc URL 302s to a renamed slug on the same `/p/305985` id — harmless, left as-is. |
+
+**Zepto's 404 is a soft 404**: HTTP 202 with a body reading "The page you're looking for has made an egg-sit". The status code is useless for detecting a dead listing there — match the copy.
+
+Useful discovery endpoints when a URL dies: `shopatsc.com/products.json?limit=250&page=N` (Shopify, works from curl, includes price + `available`), and for Vijay Sales the `/c/gaming-consoles` category page in a real browser (its `/search?q=` is client-rendered and returns games only — the console never appears there).
+
 ## Remaining manual capture work
 
 Only **Games The Shop** still needs its real stock endpoint captured (it's a client-rendered Next.js app — open a PDP, DevTools → Network → Fetch/XHR, and look for a `/api/...` or `/_next/data/...` call; the current HTML-scan fallback may not even see stock state if it's injected client-side after load). Croma is verified Akamai-blocked and not worth pursuing further from shared hosting. Reliance Digital, Vijay Sales, and Sony Center are done and verified working against live data.
@@ -72,6 +119,14 @@ When adding real tracked listings via `add_listing.php`, use product URLs in the
 - Reliance Digital: `https://www.reliancedigital.in/product/{slug}`
 - Vijay Sales: `https://www.vijaysales.com/p/{sku}/{slug}` (numeric SKU must be present in the URL)
 - Sony Center: `https://shopatsc.com/products/{handle}`
+
+Where each checker gets its **price** (all verified live 2026-07-29 — worth knowing before "fixing" a null):
+- Reliance Digital: the Fynd application API's `sizes/` endpoint (`price.effective.max`). Neither raven-api call returns a price. **Price only** — that endpoint's stock fields ignore the pincode, which is the exact bug the 2026-07-02 rewrite fixed.
+- Vijay Sales: a second GET of the PDP HTML for `data-compare-price="69990"`; the servicability microservice is stock-only.
+- Sony Center: `variants[0].price` from the Shopify product JSON already being fetched — free.
+- Flipkart, Blinkit, Zepto, MD Computers: schema.org JSON-LD / `<meta itemprop="price">` via `local-crawler/utils/structuredData.js`.
+- Croma, Games The Shop: **no usable structured data** (empty ld+json) — first plausible rupee amount in page text (floor ₹15,000, so Croma's "₹2,589/mo*" EMI line loses).
+- Amazon: `#corePrice_feature_div .a-price .a-offscreen`. Null while a listing is "Currently unavailable" (Amazon renders no price at all then) — verified the selector works by running the checker against an in-stock DualSense PDP: `in_stock`, ₹6,149.
 
 ## Commands
 
@@ -120,7 +175,7 @@ Mirrors `diet-plan`/`expense-tracker` conventions: single entry point strips the
 - **`utils/stockResultProcessor.php`** — shared `processCheckResult()` (stock_check_log insert + last_status/backoff update + transition detection) and `notifyTransitions()` (Expo push), used by both the cron worker and `/stock/report`.
 
 ### Database (`server/database/schema.sql`, migrations in `server/database/migrations/`)
-- `tracked_listings` — one row per candidate product URL/store/edition. `last_status` + `last_status_changed_at` drive notify-on-change (not on every successful poll). `store` ENUM now also includes `blinkit`/`instamart` (migration `001`), `zepto` (migration `003`), and `md_computers` (migration `004`) — apply on the live cPanel DB via SSH before registering listings for those stores (001–004 all applied to prod as of 2026-07-03). `edition` ENUM (`disc`/`digital`/`pro`, default `digital`, migration `002_add_edition.sql`) added 2026-06-30 — both the mobile app and the local dashboard filter/group by this. `add_listing.php` and `POST /listings` both accept `--edition`/`edition`; omit it for digital.
+- `tracked_listings` — one row per candidate product URL/store/edition. `last_status` + `last_status_changed_at` drive notify-on-change (not on every successful poll). `last_price` + `max_notify_price` (migration `005`, 2026-07-29) drive the price gate; `stock_check_log.price` keeps per-check history. `store` ENUM now also includes `blinkit`/`instamart` (migration `001`), `zepto` (migration `003`), and `md_computers` (migration `004`) — apply on the live cPanel DB via SSH before registering listings for those stores (001–004 all applied to prod as of 2026-07-03). `edition` ENUM (`disc`/`digital`/`pro`, default `digital`, migration `002_add_edition.sql`) added 2026-06-30 — both the mobile app and the local dashboard filter/group by this. `add_listing.php` and `POST /listings` both accept `--edition`/`edition`; omit it for digital.
 - `device_tokens` — Expo push tokens; deactivated automatically when Expo reports `DeviceNotRegistered`.
 - `stock_check_log` — one row per poll attempt, for debugging when a checker's parser breaks (grows ~288 rows/day/listing — periodic cleanup is a known follow-up, see `CPANEL_DEPLOYMENT.md`).
 
@@ -148,6 +203,7 @@ Plain Node.js script (no TypeScript, mirrors `expense-tracker/scraper`'s style),
 DB_HOST, DB_PORT, DB_NAME=ps5_tracker, DB_USER, DB_PASS
 API_KEY            # shared secret for write routes; empty disables the check (local dev only)
 DEFAULT_PINCODE=560067
+NOTIFY_MAX_PRICE=60000   # global push cap in INR; per-listing max_notify_price overrides it, 0 disables gating
 ```
 
 ### Local crawler (`local-crawler/.env`)
