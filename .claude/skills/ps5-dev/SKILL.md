@@ -3,6 +3,8 @@ name: ps5-dev
 description: Run the PS5 Tracker app locally — start the PHP API and the Expo mobile app, and run the cron poller once manually. Use to develop or test ps5-tracker.
 ---
 
+> ⚠️ **SUNSET (2026-08-18)** — this app is decommissioned, see [`../../../SUNSET.md`](../../../SUNSET.md). Kept for historical/resurrection reference; don't run this unattended.
+
 Start the PS5 Tracker backend and mobile app for local development.
 
 ## One-time setup

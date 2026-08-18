@@ -3,6 +3,8 @@ name: ps5-add-listing
 description: Register a new PS5 product URL to track (local or production), using the correct URL format for each verified store. Use when the user wants to add/track a new PS5 listing.
 ---
 
+> ⚠️ **SUNSET (2026-08-18)** — this app is decommissioned, see [`../../../SUNSET.md`](../../../SUNSET.md). Adding a listing now has no effect — nothing polls `tracked_listings` anymore.
+
 Adds a row to `tracked_listings` via the CLI script `server/scripts/add_listing.php`, or via the local crawler's dashboard form (`node local-crawler/dashboard.js` → `http://localhost:5055` → "Add a tracked listing") for a no-terminal option. There's no add/edit UI in the mobile app by design — listings are managed server-side or via the dashboard only.
 
 Every listing also has an optional **`max_notify_price`** (`--max-price=` / the dashboard's "Max notify price" field / `max_notify_price` in the POST body). Leave it blank to use the global `NOTIFY_MAX_PRICE` cap from `server/.env` (₹60,000) — an in_stock transition above the cap is logged but never pushed. **Set it explicitly for anything that legitimately costs more than the global cap, most obviously a PS5 Pro**, or that listing will be tracked but can never alert. See the "Price-gated notifications" section of the project `CLAUDE.md`.

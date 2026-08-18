@@ -3,6 +3,8 @@ name: ps5-deploy-api
 description: Deploy the PS5 Tracker PHP backend to cPanel and verify it — upload server files, configure .env, import the DB schema, register tracked listings, set up the cron job, and health-check the live API. Use when deploying or updating the PS5 Tracker server.
 ---
 
+> ⚠️ **SUNSET (2026-08-18)** — this app is decommissioned, see [`../../../SUNSET.md`](../../../SUNSET.md). The production cron job has been removed; redeploying would put code back in place but nothing polls it anymore unless the cron entry is re-added too.
+
 Deploy the PS5 Tracker **PHP** API (`server/`) to cPanel at `https://shivarya.dev/ps5_tracker/`. Backend is PHP + MySQL (front-controller `index.php` with `.htaccess`), no Composer dependencies (plain curl, no Guzzle). Single-user personal tool — no JWT, just a shared `X-Api-Key` header on write routes.
 
 **Host (GoDaddy cPanel):** SSH via `ssh cpanel` (configured alias) or the root helper `connect_ssh.ps1`. cPanel user `hm5pno1wummg`, PHP 8.4 on `/usr/local/bin/php`.
